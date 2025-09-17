@@ -6,7 +6,13 @@
 
   const PANEL_ID = 'smart-reply-extension-panel';
   const PANEL_BODY_SELECTOR = '[data-smart-reply-body]';
-  const COMPOSE_SELECTOR = 'div[aria-label="Message Body"]';
+  const COMPOSE_SELECTORS = [
+    'div[aria-label="Message Body"]',
+    'div[aria-label="メッセージ本文"]',
+    'div[role="textbox"][contenteditable="true"][aria-label][g_editable="true"]'
+  ];
+
+  const COMPOSE_SELECTOR = COMPOSE_SELECTORS.join(', ');
 
   let activeCompose = null;
   let refreshTimer = null;
@@ -232,8 +238,22 @@
     updatePanel(result);
   }
 
+  const findComposeFromTarget = (target) => {
+    if (!target) {
+      return null;
+    }
+    if (typeof target.closest === 'function') {
+      const compose = target.closest(COMPOSE_SELECTOR);
+      if (compose) {
+        return compose;
+      }
+    }
+
+    return document.querySelector(COMPOSE_SELECTOR);
+  };
+
   document.addEventListener('focusin', (event) => {
-    const compose = event.target.closest(COMPOSE_SELECTOR);
+    const compose = findComposeFromTarget(event.target);
     if (compose) {
       activeCompose = compose;
       debounceRefresh(100);
@@ -241,7 +261,7 @@
   });
 
   document.addEventListener('click', (event) => {
-    const compose = event.target.closest(COMPOSE_SELECTOR);
+    const compose = findComposeFromTarget(event.target);
     if (compose) {
       activeCompose = compose;
       debounceRefresh(150);
