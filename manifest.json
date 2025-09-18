@@ -3,6 +3,11 @@
   "name": "Smart Reply for Gmail",
   "version": "0.1.0",
   "description": "Suggests draft replies in Gmail based on the current email context.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.openai.com/*"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
@@ -12,6 +17,7 @@
     }
   ],
   "action": {
-    "default_title": "Smart Reply for Gmail"
+    "default_title": "Smart Reply for Gmail",
+    "default_popup": "src/popup.html"
   }
 }
