@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Suggests draft replies in Gmail based on the current email context.",
   "permissions": ["storage"],
-  "host_permissions": ["https://api.openai.com/*"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*"],
   "background": {
     "service_worker": "src/background.js"
   },

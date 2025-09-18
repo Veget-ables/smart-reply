@@ -1,5 +1,5 @@
-const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
-const DEFAULT_MODEL = 'gpt-3.5-turbo';
+const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent';
+const DEFAULT_MODEL = 'gemini-1.5-pro-latest';
 const DEFAULT_SUGGESTION_COUNT = 3;
 
 const STORAGE_DEFAULTS = {
@@ -48,18 +48,17 @@ async function generateSuggestionsFromAi(rawContext, language) {
   }
 
   const endpoint = apiEndpoint || DEFAULT_ENDPOINT;
-  const model = apiModel || DEFAULT_MODEL;
   const count = Math.max(1, Math.min(Number(suggestionCount) || DEFAULT_SUGGESTION_COUNT, 5));
 
   const context = (rawContext || '').trim();
-  const truncatedContext = context.length > 5000 ? `${context.slice(0, 5000)}...` : context;
+  const truncatedContext = context.length > 15000 ? `${context.slice(0, 15000)}...` : context;
   const languageLabel = language === 'ja' ? 'Japanese' : 'English';
 
   const systemPrompt = [
-    `You are an assistant that drafts professional ${languageLabel} email replies.`,
-    'Always return a valid JSON array of strings. Do not include any other text.',
-    `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`,
-    'Avoid placeholders like [NAME]; keep a polite, helpful tone.',
+    `You are an assistant that drafts professional ${languageLabel} email replies.`, 
+    'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
+    `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`, 
+    'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
   ].join(' ');
 
   const userPrompt = truncatedContext
@@ -67,38 +66,54 @@ async function generateSuggestionsFromAi(rawContext, language) {
     : `There is no email context. Provide ${count} polite ${languageLabel} acknowledgment replies.`;
 
   const body = {
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+    contents: [
+      { role: 'user', parts: [{ text: systemPrompt }] },
+      { role: 'model', parts: [{ text: "OK, I will provide the suggestions in a JSON array." }] },
+      { role: 'user', parts: [{ text: userPrompt }] },
     ],
-    temperature: 0.4,
-    max_tokens: 512,
+    generationConfig: {
+      response_mime_type: 'application/json',
+      temperature: 0.4,
+      maxOutputTokens: 512,
+    },
   };
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
 
-  if (!response.ok) {
-    const errorText = await safeReadText(response);
-    throw new Error(`AIリクエストに失敗しました (${response.status}). ${deriveErrorMessage(errorText)}`);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await safeReadText(response);
+      throw new Error(`AIリクエストに失敗しました (${response.status}). ${deriveErrorMessage(errorText)}`);
+    }
+
+    const data = await response.json().catch(() => null);
+    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const suggestions = parseSuggestions(content);
+
+    if (!suggestions.length) {
+      throw new Error('AIから有効な返信案を取得できませんでした。');
+    }
+
+    return suggestions;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('AIへのリクエストがタイムアウトしました (30秒)。');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  const data = await response.json().catch(() => null);
-  const content = data?.choices?.[0]?.message?.content;
-  const suggestions = parseSuggestions(content);
-
-  if (!suggestions.length) {
-    throw new Error('AIから有効な返信案を取得できませんでした。');
-  }
-
-  return suggestions;
 }
 
 async function safeReadText(response) {
@@ -148,9 +163,24 @@ function parseSuggestions(rawContent) {
       .filter(Boolean);
   }
 
-  return trimmed
-    .split(/\n+/)
-    .map((line) => line.replace(/^[\-\d\.\)]\s*/, '').trim())
+  // Fallback for non-JSON or malformed JSON responses
+  const cleaned = trimmed.replace(/```json|```/g, '').trim();
+  const lines = cleaned.split(/\n+/);
+  return lines
+    .map((line) => {
+      try {
+        // Try to parse each line as a JSON array/object
+        const parsedLine = JSON.parse(line);
+        if (Array.isArray(parsedLine)) {
+          return parsedLine;
+        }
+      } catch (e) {
+        // Not a JSON line, treat as plain text
+      }
+      // Cleanup for list-like formats
+      return line.replace(/^[\s\-d.\"[\\]*/, '').replace(/["\\]\s*$/, '').trim();
+    })
+    .flat()
     .filter(Boolean);
 }
 
@@ -158,6 +188,15 @@ function tryParseJson(text) {
   try {
     return JSON.parse(text);
   } catch (_error) {
+    // Fallback for content that might be wrapped in ```json ... ```
+    const match = /```json\n(.*?)\n```/s.exec(text);
+    if (match && match[1]) {
+      try {
+        return JSON.parse(match[1]);
+      } catch (e) {
+        return null;
+      }
+    }
     return null;
   }
 }

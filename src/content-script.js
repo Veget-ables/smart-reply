@@ -18,6 +18,7 @@
   let activeCompose = null;
   let activeTrigger = null;
   let activeRequestId = 0;
+  let isRequestInProgress = false;
 
   function hidePanel() {
     const panel = document.getElementById(PANEL_ID);
@@ -273,11 +274,15 @@
   }
 
   async function handleTriggerClick(compose, trigger) {
+    if (isRequestInProgress) {
+      return;
+    }
+
     const context = getLatestEmailContext();
     const language = detectLanguage(context);
     const requestId = ++activeRequestId;
 
-    updateTriggerForCompose(compose);
+    isRequestInProgress = true;
     setTriggerLoading(trigger, true);
     updatePanel({ suggestions: [], language, status: 'loading' });
     positionPanel(trigger);
@@ -302,6 +307,7 @@
       updatePanel({ suggestions: [], language, status: 'error', message });
       positionPanel(trigger);
     } finally {
+      isRequestInProgress = false;
       setTriggerLoading(trigger, false);
     }
   }

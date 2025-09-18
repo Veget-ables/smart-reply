@@ -1,7 +1,7 @@
 const STORAGE_DEFAULTS = {
   apiKey: '',
-  apiModel: 'gpt-3.5-turbo',
-  apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+  apiModel: 'gemini-1.5-pro-latest',
+  apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent',
   suggestionCount: 3,
 };
 
