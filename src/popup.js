@@ -1,7 +1,7 @@
 const STORAGE_DEFAULTS = {
   apiKey: '',
-  apiModel: 'gemini-1.5-pro-latest',
-  apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent',
+  apiModel: 'gemini-2.5-flash',
+  apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
   suggestionCount: 3,
 };
 

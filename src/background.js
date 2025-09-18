@@ -1,5 +1,5 @@
-const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent';
-const DEFAULT_MODEL = 'gemini-1.5-pro-latest';
+const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
 
 const STORAGE_DEFAULTS = {
@@ -28,8 +28,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     try {
-      const { context = '', language = 'en' } = message.payload || {};
-      const suggestions = await generateSuggestionsFromAi(context, language);
+      const { context = '', language = 'en', userPrompt = '', tones = [] } = message.payload || {};
+      const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, tones);
       sendResponse({ ok: true, suggestions, language });
     } catch (error) {
       const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
@@ -40,7 +40,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-async function generateSuggestionsFromAi(rawContext, language) {
+async function generateSuggestionsFromAi(rawContext, language, userIntent, tones) {
   const { apiKey, apiModel, apiEndpoint, suggestionCount } = await storageGet(Object.keys(STORAGE_DEFAULTS));
 
   if (!apiKey) {
@@ -54,16 +54,29 @@ async function generateSuggestionsFromAi(rawContext, language) {
   const truncatedContext = context.length > 15000 ? `${context.slice(0, 15000)}...` : context;
   const languageLabel = language === 'ja' ? 'Japanese' : 'English';
 
-  const systemPrompt = [
+  const systemPromptParts = [
     `You are an assistant that drafts professional ${languageLabel} email replies.`, 
     'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
     `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`, 
     'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
-  ].join(' ');
+  ];
 
-  const userPrompt = truncatedContext
-    ? `The latest email thread is below. Craft ${count} ${languageLabel} reply options that address it.\n\n${truncatedContext}`
-    : `There is no email context. Provide ${count} polite ${languageLabel} acknowledgment replies.`;
+  if (tones && tones.length > 0) {
+    systemPromptParts.push(`The user has requested the following tone(s): ${tones.join(', ')}. Please adhere to these tones.`);
+  }
+
+  const systemPrompt = systemPromptParts.join(' ');
+
+  let userPrompt;
+  const baseContext = truncatedContext
+    ? `The latest email thread is below:\n\n${truncatedContext}`
+    : 'There is no email context.';
+
+  if (userIntent) {
+    userPrompt = `A user wants to reply to an email with the following intent: "${userIntent}".\n\n${baseContext}\n\nBased on the user's intent and the email thread, craft ${count} professional ${languageLabel} reply options.`
+  } else {
+    userPrompt = `${baseContext}\n\nCraft ${count} professional ${languageLabel} reply options that address the email thread.`
+  }
 
   const body = {
     contents: [
@@ -178,7 +191,7 @@ function parseSuggestions(rawContent) {
         // Not a JSON line, treat as plain text
       }
       // Cleanup for list-like formats
-      return line.replace(/^[\s\-d.\"[\\]*/, '').replace(/["\\]\s*$/, '').trim();
+      return line.replace(/^["\s\-d.\[\]]*/, '').replace(/["\\]\s*$/, '').trim();
     })
     .flat()
     .filter(Boolean);
