@@ -1,6 +1,7 @@
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
+const CONTEXT_MENU_ID = 'smart-reply-context';
 
 const STORAGE_DEFAULTS = {
   apiKey: '',
@@ -38,6 +39,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })();
 
   return true;
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  setupContextMenu();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  setupContextMenu();
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CONTEXT_MENU_ID || !tab?.id) {
+    return;
+  }
+  try {
+    const options = {};
+    if (typeof info.frameId === 'number' && info.frameId >= 0) {
+      options.frameId = info.frameId;
+    }
+    chrome.tabs.sendMessage(tab.id, { type: 'SMART_REPLY_OPEN_MODAL' }, options, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (_error) {
+    // Ignore failures (e.g., tab navigated away).
+  }
 });
 
 async function generateSuggestionsFromAi(rawContext, language, userIntent, tones) {
@@ -128,6 +154,21 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function setupContextMenu() {
+  if (!chrome.contextMenus) {
+    return;
+  }
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: CONTEXT_MENU_ID,
+      title: 'Smart Reply を生成',
+      contexts: ['editable'],
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+  });
 }
 
 async function safeReadText(response) {

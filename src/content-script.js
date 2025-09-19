@@ -11,7 +11,6 @@
   const OTHER_TONE_INPUT_SELECTOR = '[data-smart-reply-other-tone-input]';
   const OTHER_TONE_CHECKBOX_SELECTOR = '[data-smart-reply-other-tone-checkbox]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
-  const TRIGGER_ID = 'smart-reply-extension-trigger';
   const COMPOSE_SELECTORS = [
     'div[aria-label="Message Body"]',
     'div[aria-label="メッセージ本文"]',
@@ -23,6 +22,10 @@
   let isRequestInProgress = false;
   let activeRequestId = 0;
   let savedSelection = null;
+
+  document.querySelectorAll('.smart-reply__floating-trigger').forEach((el) => {
+    el.remove();
+  });
 
   const TONE_OPTIONS = {
     '丁寧な': 'polite',
@@ -69,7 +72,7 @@
     form.className = 'smart-reply__form';
     form.innerHTML = `
       <label class="smart-reply__label">返信のイメージ (任意)</label>
-      <textarea class="smart-reply__user-prompt" data-smart-reply-user-prompt placeholder="感謝を伝え、会議の日程を再調整したい旨を伝える"></textarea>
+      <textarea class="smart-reply__user-prompt" data-smart-reply-user-prompt placeholder="感謝を伝え、会議の日程を再調整したい旨を伝える / 12/24とかでどうでしょうか？ / 新幹線が遅れているみたいですみません。"></textarea>
     `;
     body.appendChild(form);
 
@@ -254,66 +257,22 @@
     cacheSelectionIfInsideCompose();
   }
 
-  function ensureTrigger() {
-    let trigger = document.getElementById(TRIGGER_ID);
-    if (!trigger) {
-      trigger = document.createElement('button');
-      trigger.id = TRIGGER_ID;
-      trigger.type = 'button';
-      trigger.className = 'smart-reply__floating-trigger';
-      trigger.setAttribute('aria-label', 'Smart Reply');
-      const icon = document.createElement('span');
-      icon.className = 'smart-reply__floating-trigger-icon';
-      icon.textContent = 'AI';
-      const label = document.createElement('span');
-      label.className = 'smart-reply__floating-trigger-label';
-      label.textContent = 'Smart Reply';
-      trigger.appendChild(icon);
-      trigger.appendChild(label);
-      trigger.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const compose = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : findComposeFromTarget(document.activeElement);
-        if (!compose) return;
-        activeCompose = compose;
-        handleTriggerClick();
-      });
-      trigger.setAttribute('hidden', 'true');
-      document.body.appendChild(trigger);
+  function openSmartReplyModal() {
+    let compose = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : null;
+    if (!compose) {
+      compose = findComposeFromTarget(document.activeElement);
     }
-    return trigger;
-  }
-
-  function updateTriggerForCompose(compose) {
-    if (!compose || !document.body.contains(compose)) {
-      hideTrigger();
-      return;
+    if (!compose) {
+      compose = document.querySelector(COMPOSE_SELECTOR);
     }
-    const trigger = ensureTrigger();
-    const rect = compose.getBoundingClientRect();
-    if ((rect.width === 0 && rect.height === 0) || rect.bottom < 0 || rect.top > window.innerHeight) {
-      trigger.setAttribute('hidden', 'true');
-      return;
+    if (!compose) {
+      return false;
     }
-    const triggerRect = trigger.getBoundingClientRect();
-    const triggerWidth = triggerRect.width || 120;
-    const triggerHeight = triggerRect.height || 44;
-    const gap = 12;
-    const left = Math.min(Math.max(rect.right - triggerWidth - gap, gap), window.innerWidth - triggerWidth - gap);
-    const top = Math.min(Math.max(rect.bottom - triggerHeight - gap, gap), window.innerHeight - triggerHeight - gap);
-    trigger.style.left = `${left}px`;
-    trigger.style.top = `${top}px`;
-    trigger.removeAttribute('hidden');
-  }
-
-  function hideTrigger() {
-    const trigger = document.getElementById(TRIGGER_ID);
-    if (trigger) trigger.setAttribute('hidden', 'true');
-  }
-
-  function handleTriggerClick() {
+    activeCompose = compose;
+    compose.focus({ preventScroll: false });
     cacheSelectionIfInsideCompose();
     ensureModal();
+    return true;
   }
 
   async function handleGenerateClick() {
@@ -417,34 +376,39 @@
     const compose = findComposeFromTarget(event.target);
     if (compose) {
       activeCompose = compose;
-      updateTriggerForCompose(compose);
+      cacheSelectionIfInsideCompose();
     }
   });
 
   document.addEventListener('click', (event) => {
     const target = event.target;
-    if (!target || target.closest(`#${TRIGGER_ID}`) || target.closest(`#${MODAL_ID}`)) {
+    if (!target || target.closest(`#${MODAL_ID}`)) {
       return;
     }
     const compose = findComposeFromTarget(target);
     if (compose) {
       activeCompose = compose;
-      updateTriggerForCompose(compose);
-    } else {
-      hideTrigger();
     }
   });
 
   const observer = new MutationObserver(() => {
     if (activeCompose && !document.body.contains(activeCompose)) {
       activeCompose = null;
-      hideTrigger();
       hideModal();
       savedSelection = null;
     }
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'SMART_REPLY_OPEN_MODAL') {
+      const opened = openSmartReplyModal();
+      if (typeof sendResponse === 'function') {
+        sendResponse({ ok: opened });
+      }
+    }
+  });
 
   document.addEventListener('selectionchange', () => {
     cacheSelectionIfInsideCompose();

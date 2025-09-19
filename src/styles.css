@@ -76,10 +76,10 @@
 .smart-reply__tone-section { border: none; padding: 0; margin: 0; }
 .smart-reply__tone-section legend { padding: 0 0 8px 0; }
 .smart-reply__tone-checkboxes { display: flex; flex-wrap: wrap; gap: 12px; }
-.smart-reply__checkbox-wrapper { display: flex; align-items: center; gap: 6px; }
+.smart-reply__checkbox-wrapper { display: flex; align-items: center; gap: 6px; flex: 1 1 160px; }
 .smart-reply__checkbox-wrapper input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
 .smart-reply__checkbox-wrapper label { font-size: 14px; color: #202124; font-weight: 400; }
-.smart-reply__other-tone-input { font-size: 13px; border: none; border-bottom: 1px solid #ccc; padding: 4px; }
+.smart-reply__other-tone-input { font-size: 13px; border: none; border-bottom: 1px solid #ccc; padding: 4px; flex: 1 1 280px; min-width: 0; }
 .smart-reply__other-tone-input:disabled { background: #f1f3f4; cursor: not-allowed; }
 
 /* Generate Button */
