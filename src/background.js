@@ -59,6 +59,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
     `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`, 
     'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
+    'Within each reply, add natural paragraph breaks (e.g., greeting, body, closing) using newline characters so the email reads with clear spacing.', 
   ];
 
   if (tones && tones.length > 0) {
@@ -87,7 +88,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     generationConfig: {
       response_mime_type: 'application/json',
       temperature: 0.4,
-      maxOutputTokens: 512,
+      maxOutputTokens: 2048,
     },
   };
 

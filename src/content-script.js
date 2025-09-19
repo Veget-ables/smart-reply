@@ -22,6 +22,7 @@
   let activeCompose = null;
   let isRequestInProgress = false;
   let activeRequestId = 0;
+  let savedSelection = null;
 
   const TONE_OPTIONS = {
     '丁寧な': 'polite',
@@ -128,6 +129,46 @@
     return modal;
   }
 
+  function cacheSelectionIfInsideCompose() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const anchorElement = getElementFromNode(selection.anchorNode);
+    const compose = findComposeFromNode(anchorElement, { strict: true });
+    if (!compose || !document.body.contains(compose)) {
+      return;
+    }
+    savedSelection = { compose, range: range.cloneRange() };
+  }
+
+  function restoreSelectionForCompose(compose) {
+    if (!savedSelection || savedSelection.compose !== compose) {
+      return false;
+    }
+    if (!document.body.contains(compose)) {
+      savedSelection = null;
+      return false;
+    }
+    const selection = window.getSelection();
+    if (!selection) {
+      return false;
+    }
+    const range = savedSelection.range.cloneRange();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    savedSelection = { compose, range: range.cloneRange() };
+    return true;
+  }
+
+  function getElementFromNode(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.ELEMENT_NODE) return node;
+    if (node.nodeType === Node.TEXT_NODE) return node.parentElement;
+    return null;
+  }
+
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
     const modal = document.getElementById(MODAL_ID);
     if (!modal) return;
@@ -166,15 +207,51 @@
 
   function insertSuggestion(text) {
     if (!text) return;
-    const target = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : document.querySelector(COMPOSE_SELECTOR);
-    if (!target) return;
-    target.focus({ preventScroll: false });
+    const compose = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : document.querySelector(COMPOSE_SELECTOR);
+    if (!compose) return;
+
+    compose.focus({ preventScroll: false });
+
+    let selection = window.getSelection();
+    if (!restoreSelectionForCompose(compose)) {
+      if (selection && selection.rangeCount === 0) {
+        const range = document.createRange();
+        range.selectNodeContents(compose);
+        range.collapse(false);
+        selection.addRange(range);
+      }
+    }
+
+    selection = window.getSelection();
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, text);
+    } catch (_error) {
+      inserted = false;
+    }
+
+    if (!inserted && selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else if (!inserted && compose) {
+      compose.appendChild(document.createTextNode(text));
+    }
+
     const eventDetail = { bubbles: true, data: text, inputType: 'insertText' };
     if (typeof InputEvent === 'function') {
-      target.dispatchEvent(new InputEvent('input', eventDetail));
+      compose.dispatchEvent(new InputEvent('input', eventDetail));
     } else {
-      target.dispatchEvent(new Event('input', eventDetail));
+      compose.dispatchEvent(new Event('input', eventDetail));
     }
+
+    cacheSelectionIfInsideCompose();
   }
 
   function ensureTrigger() {
@@ -235,6 +312,7 @@
   }
 
   function handleTriggerClick() {
+    cacheSelectionIfInsideCompose();
     ensureModal();
   }
 
@@ -317,8 +395,22 @@
   }
 
   function findComposeFromTarget(target) {
-    if (!target) return null;
-    return target.closest(COMPOSE_SELECTOR) || document.querySelector(COMPOSE_SELECTOR);
+    return findComposeFromNode(target, { strict: false });
+  }
+
+  function findComposeFromNode(node, { strict } = { strict: false }) {
+    if (!node) {
+      return strict ? null : document.querySelector(COMPOSE_SELECTOR);
+    }
+    const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    if (!element) {
+      return strict ? null : document.querySelector(COMPOSE_SELECTOR);
+    }
+    const compose = element.closest(COMPOSE_SELECTOR);
+    if (compose) {
+      return compose;
+    }
+    return strict ? null : document.querySelector(COMPOSE_SELECTOR);
   }
 
   document.addEventListener('focusin', (event) => {
@@ -348,8 +440,13 @@
       activeCompose = null;
       hideTrigger();
       hideModal();
+      savedSelection = null;
     }
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  document.addEventListener('selectionchange', () => {
+    cacheSelectionIfInsideCompose();
+  });
 })();
