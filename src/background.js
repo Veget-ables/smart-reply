@@ -1,7 +1,8 @@
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
-const CONTEXT_MENU_ID = 'smart-reply-context';
+const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-context';
+const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
 
 const STORAGE_DEFAULTS = {
   apiKey: '',
@@ -23,22 +24,40 @@ function storageGet(keys) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'SMART_REPLY_GENERATE') {
+  if (!message?.type) {
     return false;
   }
 
-  (async () => {
-    try {
-      const { context = '', language = 'en', userPrompt = '', tones = [] } = message.payload || {};
-      const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, tones);
-      sendResponse({ ok: true, suggestions, language });
-    } catch (error) {
-      const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
-      sendResponse({ ok: false, error: fallbackMessage });
+  switch (message.type) {
+    case 'SMART_REPLY_GENERATE': {
+      (async () => {
+        try {
+          const { context = '', language = 'en', userPrompt = '', tones = [] } = message.payload || {};
+          const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, tones);
+          sendResponse({ ok: true, suggestions, language });
+        } catch (error) {
+          const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
+          sendResponse({ ok: false, error: fallbackMessage });
+        }
+      })();
+      return true;
     }
-  })();
-
-  return true;
+    case 'SMART_PROOFREAD_GENERATE': {
+      (async () => {
+        try {
+          const { text = '', language = 'ja' } = message.payload || {};
+          const suggestion = await generateProofreadFromAi(text, language);
+          sendResponse({ ok: true, suggestion, language });
+        } catch (error) {
+          const fallbackMessage = error instanceof Error ? error.message : '推敲リクエストで不明なエラーが発生しました。';
+          sendResponse({ ok: false, error: fallbackMessage });
+        }
+      })();
+      return true;
+    }
+    default:
+      return false;
+  }
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -50,19 +69,38 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== CONTEXT_MENU_ID || !tab?.id) {
+  if (!tab?.id) {
     return;
   }
-  try {
-    const options = {};
-    if (typeof info.frameId === 'number' && info.frameId >= 0) {
-      options.frameId = info.frameId;
+
+  const options = {};
+  if (typeof info.frameId === 'number' && info.frameId >= 0) {
+    options.frameId = info.frameId;
+  }
+
+  if (info.menuItemId === CONTEXT_MENU_SMART_REPLY_ID) {
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: 'SMART_REPLY_OPEN_MODAL' }, options, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_error) {
+      // Ignore failures (e.g., tab navigated away).
     }
-    chrome.tabs.sendMessage(tab.id, { type: 'SMART_REPLY_OPEN_MODAL' }, options, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch (_error) {
-    // Ignore failures (e.g., tab navigated away).
+    return;
+  }
+
+  if (info.menuItemId === CONTEXT_MENU_PROOFREAD_ID) {
+    try {
+      const payload = {
+        type: 'SMART_PROOFREAD_OPEN_MODAL',
+        payload: { text: info.selectionText || '' },
+      };
+      chrome.tabs.sendMessage(tab.id, payload, options, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_error) {
+      // Ignore failures (e.g., tab navigated away).
+    }
   }
 });
 
@@ -162,13 +200,100 @@ function setupContextMenu() {
   }
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: CONTEXT_MENU_ID,
+      id: CONTEXT_MENU_SMART_REPLY_ID,
       title: 'Smart Reply を生成',
       contexts: ['editable'],
     }, () => {
       void chrome.runtime.lastError;
     });
+    chrome.contextMenus.create({
+      id: CONTEXT_MENU_PROOFREAD_ID,
+      title: '選択テキストを推敲',
+      contexts: ['selection'],
+    }, () => {
+      void chrome.runtime.lastError;
+    });
   });
+}
+
+async function generateProofreadFromAi(originalText, language) {
+  const { apiKey, apiModel, apiEndpoint } = await storageGet(Object.keys(STORAGE_DEFAULTS));
+
+  if (!apiKey) {
+    throw new Error('APIキーが設定されていません。拡張機能のポップアップから設定してください。');
+  }
+
+  const endpoint = apiEndpoint || DEFAULT_ENDPOINT;
+  const trimmed = (originalText || '').trim();
+  if (!trimmed) {
+    throw new Error('推敲するテキストが空です。');
+  }
+
+  const languageLabel = language === 'ja' ? 'Japanese' : 'English';
+
+  const systemPrompt = [
+    'You are a professional business writing editor and proofreader.',
+    'Polish the provided text so it reads naturally, remains faithful to the original intent, and aligns with modern business etiquette.',
+    'Return only the revised text without extra commentary or quotation marks.',
+  ].join(' ');
+
+  const userPrompt = [
+    `Language: ${languageLabel}.`,
+    'Revise the following text accordingly.',
+    '---',
+    trimmed,
+    '---',
+  ].join('\n');
+
+  const body = {
+    contents: [
+      { role: 'user', parts: [{ text: systemPrompt }] },
+      { role: 'model', parts: [{ text: 'Understood. I will return only the polished text.' }] },
+      { role: 'user', parts: [{ text: userPrompt }] },
+    ],
+    generationConfig: {
+      response_mime_type: 'text/plain',
+      temperature: 0.2,
+      maxOutputTokens: 3072,
+    },
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await safeReadText(response);
+      throw new Error(`AIリクエストに失敗しました (${response.status}). ${deriveErrorMessage(errorText)}`);
+    }
+
+    const data = await response.json().catch(() => null);
+    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const suggestion = typeof content === 'string' ? content.trim() : '';
+
+    if (!suggestion) {
+      throw new Error('推敲結果を取得できませんでした。');
+    }
+
+    return suggestion;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('AIへのリクエストがタイムアウトしました (30秒)。');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function safeReadText(response) {

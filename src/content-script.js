@@ -11,6 +11,12 @@
   const OTHER_TONE_INPUT_SELECTOR = '[data-smart-reply-other-tone-input]';
   const OTHER_TONE_CHECKBOX_SELECTOR = '[data-smart-reply-other-tone-checkbox]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
+  const PROOFREAD_MODAL_ID = 'smart-reply-proofread-modal';
+  const PROOFREAD_SOURCE_SELECTOR = '[data-smart-proofread-source]';
+  const PROOFREAD_RESULT_SELECTOR = '[data-smart-proofread-result]';
+  const PROOFREAD_STATUS_SELECTOR = '[data-smart-proofread-status]';
+  const PROOFREAD_APPLY_SELECTOR = '[data-smart-proofread-apply]';
+  const PROOFREAD_RETRY_SELECTOR = '[data-smart-proofread-retry]';
   const COMPOSE_SELECTORS = [
     'div[aria-label="Message Body"]',
     'div[aria-label="メッセージ本文"]',
@@ -22,6 +28,9 @@
   let isRequestInProgress = false;
   let activeRequestId = 0;
   let savedSelection = null;
+  let proofreadState = null;
+  let isProofreadInProgress = false;
+  let activeProofreadRequestId = 0;
 
   document.querySelectorAll('.smart-reply__floating-trigger').forEach((el) => {
     el.remove();
@@ -132,6 +141,78 @@
     return modal;
   }
 
+  function hideProofreadModal() {
+    const modal = document.getElementById(PROOFREAD_MODAL_ID);
+    if (modal) {
+      modal.remove();
+    }
+    isProofreadInProgress = false;
+    activeProofreadRequestId += 1;
+    proofreadState = null;
+  }
+
+  function ensureProofreadModal() {
+    let modal = document.getElementById(PROOFREAD_MODAL_ID);
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = PROOFREAD_MODAL_ID;
+    modal.className = 'smart-reply__modal-overlay';
+    modal.addEventListener('click', (e) => { if (e.target === modal) hideProofreadModal(); });
+
+    const content = document.createElement('div');
+    content.className = 'smart-reply__modal-content';
+
+    const header = document.createElement('div');
+    header.className = 'smart-reply__header';
+    header.innerHTML = `<span>推敲</span><button type="button" class="smart-reply__close">×</button>`;
+    header.querySelector('.smart-reply__close').addEventListener('click', hideProofreadModal);
+    content.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'smart-reply__body smart-reply__proofread-body';
+
+    const originalSection = document.createElement('div');
+    originalSection.className = 'smart-reply__proofread-section';
+    originalSection.innerHTML = `
+      <label class="smart-reply__label">推敲前のテキスト</label>
+      <textarea class="smart-reply__user-prompt smart-reply__proofread-source" data-smart-proofread-source readonly></textarea>
+    `;
+    body.appendChild(originalSection);
+
+    const resultSection = document.createElement('div');
+    resultSection.className = 'smart-reply__proofread-section';
+    resultSection.innerHTML = `
+      <label class="smart-reply__label">推敲後のテキスト</label>
+      <textarea class="smart-reply__user-prompt smart-reply__proofread-result" data-smart-proofread-result readonly></textarea>
+      <div class="smart-reply__proofread-status" data-smart-proofread-status></div>
+    `;
+    body.appendChild(resultSection);
+
+    const actions = document.createElement('div');
+    actions.className = 'smart-reply__proofread-actions';
+    actions.innerHTML = `
+      <button type="button" class="smart-reply__generate-button" data-smart-proofread-apply disabled>取り込み</button>
+      <button type="button" class="smart-reply__button-secondary" data-smart-proofread-retry disabled>再推敲</button>
+      <button type="button" class="smart-reply__button-secondary" data-smart-proofread-close>閉じる</button>
+    `;
+    body.appendChild(actions);
+
+    content.appendChild(body);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    const applyButton = modal.querySelector(PROOFREAD_APPLY_SELECTOR);
+    const retryButton = modal.querySelector(PROOFREAD_RETRY_SELECTOR);
+    const closeButton = actions.querySelector('[data-smart-proofread-close]');
+
+    applyButton.addEventListener('click', handleProofreadApply);
+    retryButton.addEventListener('click', handleProofreadRetry);
+    closeButton.addEventListener('click', hideProofreadModal);
+
+    return modal;
+  }
+
   function cacheSelectionIfInsideCompose() {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
@@ -170,6 +251,22 @@
     if (node.nodeType === Node.ELEMENT_NODE) return node;
     if (node.nodeType === Node.TEXT_NODE) return node.parentElement;
     return null;
+  }
+
+  function getSelectionWithinCompose() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) {
+      return null;
+    }
+    const compose = findComposeFromNode(range.commonAncestorContainer, { strict: true });
+    if (!compose || !document.body.contains(compose)) {
+      return null;
+    }
+    return { compose, range: range.cloneRange() };
   }
 
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
@@ -273,6 +370,218 @@
     cacheSelectionIfInsideCompose();
     ensureModal();
     return true;
+  }
+
+  function openProofreadModal(initialText, selectionInfo) {
+    if (!selectionInfo || !initialText) {
+      return false;
+    }
+
+    const { compose, range } = selectionInfo;
+    if (!compose || !document.body.contains(compose)) {
+      return false;
+    }
+
+    activeCompose = compose;
+    proofreadState = {
+      compose,
+      range: range.cloneRange(),
+      originalText: initialText,
+      resultText: '',
+      language: detectLanguage(initialText),
+    };
+
+    savedSelection = { compose, range: range.cloneRange() };
+
+    compose.focus({ preventScroll: false });
+    cacheSelectionIfInsideCompose();
+
+    const modal = ensureProofreadModal();
+    const sourceField = modal.querySelector(PROOFREAD_SOURCE_SELECTOR);
+    const resultField = modal.querySelector(PROOFREAD_RESULT_SELECTOR);
+    if (sourceField) {
+      sourceField.value = initialText;
+    }
+    if (resultField) {
+      resultField.value = '';
+    }
+    updateProofreadModal({ status: 'loading', message: '', language: proofreadState.language });
+    startProofread();
+    return true;
+  }
+
+  function updateProofreadModal({ status, text = '', message = '', language = 'ja' }) {
+    const modal = document.getElementById(PROOFREAD_MODAL_ID);
+    if (!modal) return;
+    const resultField = modal.querySelector(PROOFREAD_RESULT_SELECTOR);
+    const statusEl = modal.querySelector(PROOFREAD_STATUS_SELECTOR);
+    const applyButton = modal.querySelector(PROOFREAD_APPLY_SELECTOR);
+    const retryButton = modal.querySelector(PROOFREAD_RETRY_SELECTOR);
+
+    if (resultField && status !== 'loading') {
+      resultField.value = text;
+    }
+
+    if (statusEl) {
+      if (status === 'loading') {
+        statusEl.textContent = language === 'ja' ? 'AIが推敲しています…' : 'Polishing in progress…';
+        statusEl.classList.remove('smart-reply__proofread-status--error');
+      } else if (status === 'error') {
+        statusEl.textContent = message || (language === 'ja' ? '推敲に失敗しました。' : 'Failed to proofread.');
+        statusEl.classList.add('smart-reply__proofread-status--error');
+      } else {
+        statusEl.textContent = '';
+        statusEl.classList.remove('smart-reply__proofread-status--error');
+      }
+    }
+
+    if (applyButton) {
+      applyButton.disabled = status !== 'success';
+    }
+
+    if (retryButton) {
+      retryButton.disabled = status === 'loading';
+    }
+  }
+
+  async function startProofread() {
+    if (!proofreadState || isProofreadInProgress) {
+      return;
+    }
+    const { originalText, language } = proofreadState;
+    if (!originalText) {
+      updateProofreadModal({ status: 'error', message: '推敲するテキストが選択されていません。', language: 'ja' });
+      return;
+    }
+
+    proofreadState.resultText = '';
+    const modal = document.getElementById(PROOFREAD_MODAL_ID);
+    if (modal) {
+      const resultField = modal.querySelector(PROOFREAD_RESULT_SELECTOR);
+      if (resultField) {
+        resultField.value = '';
+      }
+    }
+
+    isProofreadInProgress = true;
+    const requestId = ++activeProofreadRequestId;
+    updateProofreadModal({ status: 'loading', language });
+
+    try {
+      const response = await requestProofreadSuggestion(originalText, language);
+      if (requestId !== activeProofreadRequestId) {
+        return;
+      }
+      const suggestion = typeof response?.suggestion === 'string' ? response.suggestion.trim() : '';
+      if (!suggestion) {
+        throw new Error('推敲結果が空です。');
+      }
+      if (!proofreadState) {
+        return;
+      }
+      proofreadState.resultText = suggestion;
+      updateProofreadModal({ status: 'success', text: suggestion, language });
+    } catch (error) {
+      if (requestId !== activeProofreadRequestId) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error || '');
+      updateProofreadModal({ status: 'error', message, language: proofreadState?.language || 'ja' });
+    } finally {
+      if (requestId === activeProofreadRequestId) {
+        isProofreadInProgress = false;
+      }
+    }
+  }
+
+  function handleProofreadApply() {
+    if (!proofreadState || !proofreadState.resultText) {
+      return;
+    }
+    const { compose, range, resultText } = proofreadState;
+    if (!compose || !document.body.contains(compose) || !range) {
+      hideProofreadModal();
+      return;
+    }
+
+    compose.focus({ preventScroll: false });
+
+    const replacementRange = range.cloneRange();
+    let selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(replacementRange);
+    }
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, resultText);
+    } catch (_error) {
+      inserted = false;
+    }
+
+    let finalRange = null;
+
+    if (!inserted) {
+      const targetRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : replacementRange;
+      targetRange.deleteContents();
+      const textNode = document.createTextNode(resultText);
+      targetRange.insertNode(textNode);
+      targetRange.setStartAfter(textNode);
+      targetRange.collapse(true);
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(targetRange);
+      }
+      finalRange = targetRange.cloneRange();
+    } else if (selection && selection.rangeCount > 0) {
+      finalRange = selection.getRangeAt(0).cloneRange();
+    }
+
+    if (finalRange) {
+      savedSelection = { compose, range: finalRange.cloneRange() };
+    }
+
+    const eventDetail = { bubbles: true, data: resultText, inputType: 'insertText' };
+    if (typeof InputEvent === 'function') {
+      compose.dispatchEvent(new InputEvent('input', eventDetail));
+    } else {
+      compose.dispatchEvent(new Event('input', eventDetail));
+    }
+
+    proofreadState = null;
+    cacheSelectionIfInsideCompose();
+    hideProofreadModal();
+  }
+
+  function handleProofreadRetry() {
+    if (!proofreadState || isProofreadInProgress) {
+      return;
+    }
+    startProofread();
+  }
+
+  function requestProofreadSuggestion(text, language) {
+    return new Promise((resolve, reject) => {
+      if (!chrome.runtime?.sendMessage) {
+        reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
+        return;
+      }
+      chrome.runtime.sendMessage(
+        { type: 'SMART_PROOFREAD_GENERATE', payload: { text, language } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message || '推敲の生成リクエストに失敗しました。'));
+          } else if (!response) {
+            reject(new Error('AIから推敲結果が受信できませんでした。'));
+          } else if (!response.ok) {
+            reject(new Error(response.error || '推敲の生成に失敗しました。'));
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
   }
 
   async function handleGenerateClick() {
@@ -382,7 +691,7 @@
 
   document.addEventListener('click', (event) => {
     const target = event.target;
-    if (!target || target.closest(`#${MODAL_ID}`)) {
+    if (!target || target.closest(`#${MODAL_ID}`) || target.closest(`#${PROOFREAD_MODAL_ID}`)) {
       return;
     }
     const compose = findComposeFromTarget(target);
@@ -395,6 +704,7 @@
     if (activeCompose && !document.body.contains(activeCompose)) {
       activeCompose = null;
       hideModal();
+      hideProofreadModal();
       savedSelection = null;
     }
   });
@@ -404,6 +714,27 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'SMART_REPLY_OPEN_MODAL') {
       const opened = openSmartReplyModal();
+      if (typeof sendResponse === 'function') {
+        sendResponse({ ok: opened });
+      }
+      return;
+    }
+
+    if (message?.type === 'SMART_PROOFREAD_OPEN_MODAL') {
+      const selectionInfo = getSelectionWithinCompose();
+      const selectionText = selectionInfo ? selectionInfo.range.toString() : '';
+      const fallbackText = (message?.payload?.text || '').trim();
+      const textToProofread = selectionText || fallbackText;
+
+      if (!selectionInfo || !textToProofread) {
+        window.alert('Gmailの本文から推敲したいテキストを選択してから実行してください。');
+        if (typeof sendResponse === 'function') {
+          sendResponse({ ok: false, error: 'NO_SELECTION' });
+        }
+        return;
+      }
+
+      const opened = openProofreadModal(textToProofread, selectionInfo);
       if (typeof sendResponse === 'function') {
         sendResponse({ ok: opened });
       }
