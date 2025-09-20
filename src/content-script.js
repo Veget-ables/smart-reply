@@ -490,7 +490,7 @@
       return text;
     }
 
-    return sentences.join(' \n');
+    return sentences.join('\n');
   }
 
   function splitSentences(text) {
@@ -512,7 +512,8 @@
           result.push(buffer.trim());
           buffer = '';
         }
-      } else if (char === '\n') {
+      }
+      if (char === '\n') {
         result.push(buffer.trim());
         buffer = '';
       }
@@ -527,10 +528,11 @@
 
   function normalizeWhitespacePreservingParagraphs(text) {
     return text
+      .replace(/\r\n?/g, '\n')
       .replace(/[\u00A0\u200B]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .replace(/\s+\n/g, '\n')
-      .replace(/\n\s+/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
 
@@ -599,22 +601,68 @@
     return true;
   }
 
-  function replaceRangeWithText(range, text) {
+  function replaceRangeWithHtml(range, html, fallbackText) {
     if (!range) {
       return null;
     }
     const selection = window.getSelection();
+    let fragment;
+    try {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      fragment = template.content;
+    } catch (_error) {
+      fragment = null;
+    }
+
     range.deleteContents();
-    const textNode = document.createTextNode(text);
-    range.insertNode(textNode);
+
+    let endNode;
+    if (fragment && fragment.childNodes.length) {
+      const clone = fragment.cloneNode(true);
+      endNode = clone.lastChild;
+      range.insertNode(clone);
+    } else {
+      const textNode = document.createTextNode(fallbackText);
+      range.insertNode(textNode);
+      endNode = textNode;
+    }
+
     const collapsed = document.createRange();
-    collapsed.setStartAfter(textNode);
+    collapsed.setStartAfter(endNode);
     collapsed.collapse(true);
     if (selection) {
       selection.removeAllRanges();
       selection.addRange(collapsed);
     }
     return collapsed;
+  }
+
+  function convertTextToHtml(text) {
+    if (!text) {
+      return '';
+    }
+    const paragraphs = text
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.split('\n'));
+
+    const htmlParagraphs = paragraphs.map((lines) => {
+      const safeLines = lines.map((line) => escapeHtml(line));
+      return `<div>${safeLines.join('<br>')}</div>`;
+    });
+
+    return htmlParagraphs.join('');
+  }
+
+  function escapeHtml(value) {
+    const map = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return value.replace(/[&<>"']/g, (char) => map[char] || char);
   }
 
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
@@ -675,11 +723,12 @@
     selection = window.getSelection();
 
     const { content: contentToInsert, range: referenceRange } = prepareFormattedSuggestion(text, compose);
+    const htmlToInsert = convertTextToHtml(contentToInsert);
 
     let inserted = false;
     if (!markerRangeApplied) {
       try {
-        inserted = document.execCommand('insertText', false, contentToInsert);
+        inserted = document.execCommand('insertHTML', false, htmlToInsert);
       } catch (_error) {
         inserted = false;
       }
@@ -688,23 +737,19 @@
     if (markerRangeApplied) {
       const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : referenceRange;
       if (range) {
-        replaceRangeWithText(range, contentToInsert);
+        replaceRangeWithHtml(range, htmlToInsert, contentToInsert);
         inserted = true;
       }
     } else if (!inserted && selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
-      replaceRangeWithText(range, contentToInsert);
+      replaceRangeWithHtml(range, htmlToInsert, contentToInsert);
       inserted = true;
     } else if (!inserted && compose) {
-      const textNode = document.createTextNode(contentToInsert);
-      compose.appendChild(textNode);
-      const range = document.createRange();
-      range.setStartAfter(textNode);
-      range.collapse(true);
-      if (selection) {
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
+      const fallbackRange = document.createRange();
+      fallbackRange.selectNodeContents(compose);
+      fallbackRange.collapse(false);
+      replaceRangeWithHtml(fallbackRange, htmlToInsert, contentToInsert);
+      inserted = true;
     }
 
     const eventDetail = { bubbles: true, data: contentToInsert, inputType: 'insertText' };

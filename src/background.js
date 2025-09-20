@@ -134,7 +134,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
     `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`, 
     'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
-    'Within each reply, add natural paragraph breaks (e.g., greeting, body, closing) using newline characters so the email reads with clear spacing.', 
+    'Format each reply so that every sentence starts on a new line. Insert a blank line between the greeting, body, and closing (e.g., "こんにちは\n\nご連絡ありがとうございます。\n追加情報をご教示ください。\n\nよろしくお願いいたします。"). Do not return a single-line paragraph.', 
   ];
 
   if (tones && tones.length > 0) {
