@@ -79,7 +79,17 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     options.frameId = info.frameId;
   }
 
-  if (info.menuItemId === CONTEXT_MENU_SMART_REPLY_ID) {
+  const messageTarget = info.menuItemId === CONTEXT_MENU_SMART_REPLY_ID
+    ? 'SMART_REPLY_OPEN_MODAL'
+    : info.menuItemId === CONTEXT_MENU_PROOFREAD_ID
+      ? 'SMART_PROOFREAD_OPEN_MODAL'
+      : null;
+
+  if (!messageTarget) {
+    return;
+  }
+
+  if (messageTarget === 'SMART_REPLY_OPEN_MODAL') {
     try {
       chrome.tabs.sendMessage(tab.id, { type: 'SMART_REPLY_OPEN_MODAL' }, options, () => {
         void chrome.runtime.lastError;
@@ -90,7 +100,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     return;
   }
 
-  if (info.menuItemId === CONTEXT_MENU_PROOFREAD_ID) {
+  if (messageTarget === 'SMART_PROOFREAD_OPEN_MODAL') {
     try {
       const payload = {
         type: 'SMART_PROOFREAD_OPEN_MODAL',

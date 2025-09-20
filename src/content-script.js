@@ -400,6 +400,140 @@
     return node.childNodes ? node.childNodes.length : 0;
   }
 
+  function getCurrentInsertionRange(compose) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    if (!isRangeWithinCompose(range, compose)) {
+      return null;
+    }
+    return range.cloneRange();
+  }
+
+  function getTextBeforeRange(compose, range, limit = 200) {
+    if (!range || !compose.contains(range.startContainer)) {
+      return '';
+    }
+    try {
+      const preRange = range.cloneRange();
+      preRange.selectNodeContents(compose);
+      preRange.setEnd(range.startContainer, range.startOffset);
+      const text = preRange.toString();
+      return limit ? text.slice(-limit) : text;
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function getTextAfterRange(compose, range, limit = 200) {
+    if (!range || !compose.contains(range.endContainer)) {
+      return '';
+    }
+    try {
+      const postRange = range.cloneRange();
+      postRange.selectNodeContents(compose);
+      postRange.setStart(range.endContainer, range.endOffset);
+      const text = postRange.toString();
+      return limit ? text.slice(0, limit) : text;
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function prepareFormattedSuggestion(text, compose) {
+    const range = getCurrentInsertionRange(compose);
+    const before = range ? getTextBeforeRange(compose, range, 400) : '';
+    const after = range ? getTextAfterRange(compose, range, 400) : '';
+
+    const trimmed = text.trim();
+    const normalized = normalizeWhitespacePreservingParagraphs(trimmed);
+    let result = applyNaturalLineBreaks(normalized);
+
+    const beforeHasContent = /\S/.test(before);
+    if (beforeHasContent) {
+      if (before.endsWith('\n\n')) {
+        // already separated by a blank line
+      } else if (before.endsWith('\n')) {
+        result = `\n${result}`;
+      } else {
+        result = `\n\n${result}`;
+      }
+    }
+
+    if (!result.endsWith('\n')) {
+      result += '\n';
+    }
+
+    const afterHasContent = /\S/.test(after);
+    if (afterHasContent) {
+      if (after.startsWith('\n\n')) {
+        // already separated by a blank line
+      } else if (after.startsWith('\n')) {
+        result += '\n';
+      } else {
+        result += '\n\n';
+      }
+    }
+
+    return { content: result, range };
+  }
+
+  function applyNaturalLineBreaks(text) {
+    if (!text) {
+      return text;
+    }
+
+    const sentences = splitSentences(text);
+    if (!sentences.length) {
+      return text;
+    }
+
+    return sentences.join(' \n');
+  }
+
+  function splitSentences(text) {
+    const result = [];
+    let buffer = '';
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      buffer += char;
+
+      if (/[。！？]/.test(char)) {
+        const next = text[i + 1];
+        if (!next || !/[。！？、,.\s\n]/.test(next)) {
+          result.push(buffer.trim());
+          buffer = '';
+        }
+      } else if (/[.!?]/.test(char)) {
+        const next = text[i + 1];
+        if (!next || /[A-Z\s\n]/.test(next)) {
+          result.push(buffer.trim());
+          buffer = '';
+        }
+      } else if (char === '\n') {
+        result.push(buffer.trim());
+        buffer = '';
+      }
+    }
+
+    if (buffer.trim()) {
+      result.push(buffer.trim());
+    }
+
+    return result.filter(Boolean);
+  }
+
+  function normalizeWhitespacePreservingParagraphs(text) {
+    return text
+      .replace(/[\u00A0\u200B]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+\n/g, '\n')
+      .replace(/\n\s+/g, '\n')
+      .trim();
+  }
+
   function insertCaretMarker(compose, baseRange) {
     if (!compose || !document.body.contains(compose)) {
       return;
@@ -467,18 +601,20 @@
 
   function replaceRangeWithText(range, text) {
     if (!range) {
-      return;
+      return null;
     }
+    const selection = window.getSelection();
     range.deleteContents();
     const textNode = document.createTextNode(text);
     range.insertNode(textNode);
-    range.setStartAfter(textNode);
-    range.collapse(true);
-    const selection = window.getSelection();
+    const collapsed = document.createRange();
+    collapsed.setStartAfter(textNode);
+    collapsed.collapse(true);
     if (selection) {
       selection.removeAllRanges();
-      selection.addRange(range);
+      selection.addRange(collapsed);
     }
+    return collapsed;
   }
 
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
@@ -538,27 +674,29 @@
 
     selection = window.getSelection();
 
+    const { content: contentToInsert, range: referenceRange } = prepareFormattedSuggestion(text, compose);
+
     let inserted = false;
     if (!markerRangeApplied) {
       try {
-        inserted = document.execCommand('insertText', false, text);
+        inserted = document.execCommand('insertText', false, contentToInsert);
       } catch (_error) {
         inserted = false;
       }
     }
 
     if (markerRangeApplied) {
-      const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : referenceRange;
       if (range) {
-        replaceRangeWithText(range, text);
+        replaceRangeWithText(range, contentToInsert);
         inserted = true;
       }
     } else if (!inserted && selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
-      replaceRangeWithText(range, text);
+      replaceRangeWithText(range, contentToInsert);
       inserted = true;
     } else if (!inserted && compose) {
-      const textNode = document.createTextNode(text);
+      const textNode = document.createTextNode(contentToInsert);
       compose.appendChild(textNode);
       const range = document.createRange();
       range.setStartAfter(textNode);
@@ -569,7 +707,7 @@
       }
     }
 
-    const eventDetail = { bubbles: true, data: text, inputType: 'insertText' };
+    const eventDetail = { bubbles: true, data: contentToInsert, inputType: 'insertText' };
     if (typeof InputEvent === 'function') {
       compose.dispatchEvent(new InputEvent('input', eventDetail));
     } else {
