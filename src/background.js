@@ -1,7 +1,8 @@
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
-const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-context';
+const CONTEXT_MENU_ROOT_ID = 'smart-reply-root';
+const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-generate';
 const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
 
 const STORAGE_DEFAULTS = {
@@ -215,7 +216,15 @@ function setupContextMenu() {
   }
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
+      id: CONTEXT_MENU_ROOT_ID,
+      title: 'Smart Reply for Gmail',
+      contexts: ['editable'],
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+    chrome.contextMenus.create({
       id: CONTEXT_MENU_SMART_REPLY_ID,
+      parentId: CONTEXT_MENU_ROOT_ID,
       title: 'Smart Reply を生成',
       contexts: ['editable'],
     }, () => {
@@ -223,8 +232,9 @@ function setupContextMenu() {
     });
     chrome.contextMenus.create({
       id: CONTEXT_MENU_PROOFREAD_ID,
+      parentId: CONTEXT_MENU_ROOT_ID,
       title: '選択テキストを推敲',
-      contexts: ['selection'],
+      contexts: ['editable'],
     }, () => {
       void chrome.runtime.lastError;
     });

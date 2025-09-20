@@ -11,6 +11,7 @@
   const OTHER_TONE_INPUT_SELECTOR = '[data-smart-reply-other-tone-input]';
   const OTHER_TONE_CHECKBOX_SELECTOR = '[data-smart-reply-other-tone-checkbox]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
+  const CARET_MARKER_SELECTOR = '[data-smart-reply-caret]';
   const PROOFREAD_MODAL_ID = 'smart-reply-proofread-modal';
   const PROOFREAD_SOURCE_SELECTOR = '[data-smart-proofread-source]';
   const PROOFREAD_RESULT_SELECTOR = '[data-smart-proofread-result]';
@@ -51,6 +52,9 @@
       modal.remove();
     }
     isRequestInProgress = false;
+    if (activeCompose && document.body.contains(activeCompose)) {
+      removeCaretMarker(activeCompose);
+    }
   }
 
   function ensureModal() {
@@ -219,12 +223,11 @@
       return;
     }
     const range = selection.getRangeAt(0);
-    const anchorElement = getElementFromNode(selection.anchorNode);
-    const compose = findComposeFromNode(anchorElement, { strict: true });
+    const compose = findComposeFromNode(selection.anchorNode, { strict: true });
     if (!compose || !document.body.contains(compose)) {
       return;
     }
-    savedSelection = { compose, range: range.cloneRange() };
+    storeSelection(compose, range);
   }
 
   function restoreSelectionForCompose(compose) {
@@ -239,10 +242,25 @@
     if (!selection) {
       return false;
     }
-    const range = savedSelection.range.cloneRange();
+
+    let range = savedSelection.range;
+    if (!isRangeWithinCompose(range, compose)) {
+      if (savedSelection.serialized) {
+        range = deserializeRange(compose, savedSelection.serialized);
+        if (!range) {
+          savedSelection = null;
+          return false;
+        }
+      } else {
+        savedSelection = null;
+        return false;
+      }
+    }
+
+    const clone = range.cloneRange();
     selection.removeAllRanges();
-    selection.addRange(range);
-    savedSelection = { compose, range: range.cloneRange() };
+    selection.addRange(clone);
+    storeSelection(compose, clone);
     return true;
   }
 
@@ -283,6 +301,184 @@
       return null;
     }
     return { compose, range: range.cloneRange(), collapsed: range.collapsed };
+  }
+
+  function storeSelection(compose, range) {
+    if (!compose || !range) {
+      return;
+    }
+    const serialized = serializeRange(range, compose);
+    savedSelection = {
+      compose,
+      range: range.cloneRange(),
+      serialized,
+    };
+  }
+
+  function isRangeWithinCompose(range, compose) {
+    if (!range || !compose) {
+      return false;
+    }
+    return isNodeWithin(range.startContainer, compose) && isNodeWithin(range.endContainer, compose);
+  }
+
+  function isNodeWithin(node, root) {
+    while (node) {
+      if (node === root) {
+        return true;
+      }
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  function serializeRange(range, root) {
+    const startPath = buildNodePath(range.startContainer, root);
+    const endPath = buildNodePath(range.endContainer, root);
+    if (!startPath || !endPath) {
+      return null;
+    }
+    return {
+      startPath,
+      startOffset: range.startOffset,
+      endPath,
+      endOffset: range.endOffset,
+    };
+  }
+
+  function deserializeRange(root, serialized) {
+    if (!serialized) {
+      return null;
+    }
+    const startNode = traversePath(root, serialized.startPath);
+    const endNode = traversePath(root, serialized.endPath);
+    if (!startNode || !endNode) {
+      return null;
+    }
+    const range = document.createRange();
+    range.setStart(startNode, Math.min(serialized.startOffset, getNodeLength(startNode)));
+    range.setEnd(endNode, Math.min(serialized.endOffset, getNodeLength(endNode)));
+    return range;
+  }
+
+  function buildNodePath(node, root) {
+    const path = [];
+    let current = node;
+    while (current && current !== root) {
+      const parent = current.parentNode;
+      if (!parent) {
+        return null;
+      }
+      const index = Array.prototype.indexOf.call(parent.childNodes, current);
+      path.unshift(index);
+      current = parent;
+    }
+    if (current !== root) {
+      return null;
+    }
+    return path;
+  }
+
+  function traversePath(root, path) {
+    let current = root;
+    for (const index of path) {
+      if (!current || !current.childNodes || index < 0 || index >= current.childNodes.length) {
+        return null;
+      }
+      current = current.childNodes[index];
+    }
+    return current;
+  }
+
+  function getNodeLength(node) {
+    if (!node) {
+      return 0;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.textContent ? node.textContent.length : 0;
+    }
+    return node.childNodes ? node.childNodes.length : 0;
+  }
+
+  function insertCaretMarker(compose, baseRange) {
+    if (!compose || !document.body.contains(compose)) {
+      return;
+    }
+    removeCaretMarker(compose);
+    const selection = window.getSelection();
+    const snapshot = baseRange ? baseRange.cloneRange() : (selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null);
+    if (!snapshot) {
+      return;
+    }
+    const marker = document.createElement('span');
+    marker.setAttribute('data-smart-reply-caret', '');
+    marker.style.display = 'inline-block';
+    marker.style.width = '0px';
+    marker.style.height = '0px';
+    marker.style.lineHeight = '0px';
+    marker.appendChild(document.createTextNode('\u200b'));
+    snapshot.collapse(true);
+    snapshot.insertNode(marker);
+    snapshot.setStartAfter(marker);
+    snapshot.collapse(true);
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(snapshot);
+    }
+  }
+
+  function removeCaretMarker(root) {
+    if (!root) return;
+    root.querySelectorAll(CARET_MARKER_SELECTOR).forEach((marker) => {
+      const parent = marker.parentNode;
+      if (!parent) {
+        return;
+      }
+      if (marker.firstChild && marker.firstChild.nodeValue === '\u200b') {
+        marker.firstChild.nodeValue = '';
+      }
+      parent.removeChild(marker);
+    });
+  }
+
+  function restoreSelectionFromMarker(compose) {
+    if (!compose) {
+      return false;
+    }
+    const marker = compose.querySelector(CARET_MARKER_SELECTOR);
+    if (!marker) {
+      return false;
+    }
+    const selection = window.getSelection();
+    if (!selection) {
+      return false;
+    }
+    const range = document.createRange();
+    range.selectNode(marker);
+    range.deleteContents();
+    const collapsedRange = document.createRange();
+    collapsedRange.setStart(range.startContainer, range.startOffset);
+    collapsedRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(collapsedRange);
+    storeSelection(compose, collapsedRange);
+    return true;
+  }
+
+  function replaceRangeWithText(range, text) {
+    if (!range) {
+      return;
+    }
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
   }
 
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
@@ -328,8 +524,10 @@
 
     compose.focus({ preventScroll: false });
 
+    const markerRangeApplied = restoreSelectionFromMarker(compose);
+
     let selection = window.getSelection();
-    if (!restoreSelectionForCompose(compose)) {
+    if (!markerRangeApplied && !restoreSelectionForCompose(compose)) {
       if (selection && selection.rangeCount === 0) {
         const range = document.createRange();
         range.selectNodeContents(compose);
@@ -341,23 +539,34 @@
     selection = window.getSelection();
 
     let inserted = false;
-    try {
-      inserted = document.execCommand('insertText', false, text);
-    } catch (_error) {
-      inserted = false;
+    if (!markerRangeApplied) {
+      try {
+        inserted = document.execCommand('insertText', false, text);
+      } catch (_error) {
+        inserted = false;
+      }
     }
 
-    if (!inserted && selection && selection.rangeCount > 0) {
+    if (markerRangeApplied) {
+      const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      if (range) {
+        replaceRangeWithText(range, text);
+        inserted = true;
+      }
+    } else if (!inserted && selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
-      range.deleteContents();
+      replaceRangeWithText(range, text);
+      inserted = true;
+    } else if (!inserted && compose) {
       const textNode = document.createTextNode(text);
-      range.insertNode(textNode);
+      compose.appendChild(textNode);
+      const range = document.createRange();
       range.setStartAfter(textNode);
       range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    } else if (!inserted && compose) {
-      compose.appendChild(document.createTextNode(text));
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }
 
     const eventDetail = { bubbles: true, data: text, inputType: 'insertText' };
@@ -367,6 +576,7 @@
       compose.dispatchEvent(new Event('input', eventDetail));
     }
 
+    removeCaretMarker(compose);
     cacheSelectionIfInsideCompose();
   }
 
@@ -384,7 +594,8 @@
 
     const snapshot = getCaretSnapshot({ allowCollapsed: true });
     if (snapshot && snapshot.compose === compose) {
-      savedSelection = { compose, range: snapshot.range.cloneRange() };
+      insertCaretMarker(compose, snapshot.range);
+      storeSelection(compose, snapshot.range);
     }
 
     activeCompose = compose;
@@ -395,9 +606,11 @@
         selection.removeAllRanges();
         selection.addRange(snapshot.range.cloneRange());
       }
-      savedSelection = { compose, range: snapshot.range.cloneRange() };
+      insertCaretMarker(compose, snapshot.range);
+      storeSelection(compose, snapshot.range);
     } else {
       cacheSelectionIfInsideCompose();
+      insertCaretMarker(compose);
     }
     ensureModal();
     return true;
@@ -422,7 +635,7 @@
       language: detectLanguage(initialText),
     };
 
-    savedSelection = { compose, range: range.cloneRange() };
+    storeSelection(compose, range);
 
     compose.focus({ preventScroll: false });
     cacheSelectionIfInsideCompose();
@@ -570,7 +783,7 @@
     }
 
     if (finalRange) {
-      savedSelection = { compose, range: finalRange.cloneRange() };
+      storeSelection(compose, finalRange);
     }
 
     const eventDetail = { bubbles: true, data: resultText, inputType: 'insertText' };
@@ -728,6 +941,18 @@
     const compose = findComposeFromTarget(target);
     if (compose) {
       activeCompose = compose;
+    }
+  });
+
+  document.addEventListener('contextmenu', (event) => {
+    const compose = findComposeFromTarget(event.target);
+    if (!compose) {
+      return;
+    }
+    activeCompose = compose;
+    const snapshot = getCaretSnapshot({ allowCollapsed: true });
+    if (snapshot && snapshot.compose === compose) {
+      storeSelection(compose, snapshot.range);
     }
   });
 
