@@ -269,6 +269,22 @@
     return { compose, range: range.cloneRange() };
   }
 
+  function getCaretSnapshot({ allowCollapsed = false } = {}) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    if (!allowCollapsed && range.collapsed) {
+      return null;
+    }
+    const compose = findComposeFromNode(range.commonAncestorContainer, { strict: true });
+    if (!compose || !document.body.contains(compose)) {
+      return null;
+    }
+    return { compose, range: range.cloneRange(), collapsed: range.collapsed };
+  }
+
   function updateSuggestions({ suggestions = [], language = 'en', status = 'ready', message = '' }) {
     const modal = document.getElementById(MODAL_ID);
     if (!modal) return;
@@ -365,9 +381,24 @@
     if (!compose) {
       return false;
     }
+
+    const snapshot = getCaretSnapshot({ allowCollapsed: true });
+    if (snapshot && snapshot.compose === compose) {
+      savedSelection = { compose, range: snapshot.range.cloneRange() };
+    }
+
     activeCompose = compose;
     compose.focus({ preventScroll: false });
-    cacheSelectionIfInsideCompose();
+    if (snapshot && snapshot.compose === compose) {
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(snapshot.range.cloneRange());
+      }
+      savedSelection = { compose, range: snapshot.range.cloneRange() };
+    } else {
+      cacheSelectionIfInsideCompose();
+    }
     ensureModal();
     return true;
   }

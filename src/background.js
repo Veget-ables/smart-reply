@@ -143,6 +143,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     userPrompt = `${baseContext}\n\nCraft ${count} professional ${languageLabel} reply options that address the email thread.`
   }
 
+  const maxOutputTokens = 4000;
   const body = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt }] },
@@ -152,7 +153,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     generationConfig: {
       response_mime_type: 'application/json',
       temperature: 0.4,
-      maxOutputTokens: 2048,
+      maxOutputTokens,
     },
   };
 
@@ -176,7 +177,21 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     }
 
     const data = await response.json().catch(() => null);
-    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = data?.candidates?.[0];
+
+    if (!candidate) {
+      throw new Error('AIから応答が返ってきませんでした。しばらくしてから再試行してください。');
+    }
+
+    const candidateIssue = evaluateCandidateIssue(candidate, {
+      maxOutputTokens,
+      activityLabel: '返信案',
+    });
+    if (candidateIssue) {
+      throw new Error(candidateIssue);
+    }
+
+    const content = candidate?.content?.parts?.[0]?.text;
     const suggestions = parseSuggestions(content);
 
     if (!suggestions.length) {
@@ -245,6 +260,7 @@ async function generateProofreadFromAi(originalText, language) {
     '---',
   ].join('\n');
 
+  const maxOutputTokens = 4000;
   const body = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt }] },
@@ -254,7 +270,7 @@ async function generateProofreadFromAi(originalText, language) {
     generationConfig: {
       response_mime_type: 'text/plain',
       temperature: 0.2,
-      maxOutputTokens: 3072,
+      maxOutputTokens,
     },
   };
 
@@ -278,7 +294,21 @@ async function generateProofreadFromAi(originalText, language) {
     }
 
     const data = await response.json().catch(() => null);
-    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = data?.candidates?.[0];
+
+    if (!candidate) {
+      throw new Error('AIから推敲結果が返ってきませんでした。選択範囲を確認して再試行してください。');
+    }
+
+    const candidateIssue = evaluateCandidateIssue(candidate, {
+      maxOutputTokens,
+      activityLabel: '推敲結果',
+    });
+    if (candidateIssue) {
+      throw new Error(candidateIssue);
+    }
+
+    const content = candidate?.content?.parts?.[0]?.text;
     const suggestion = typeof content === 'string' ? content.trim() : '';
 
     if (!suggestion) {
@@ -362,6 +392,60 @@ function parseSuggestions(rawContent) {
     })
     .flat()
     .filter(Boolean);
+}
+
+function evaluateCandidateIssue(candidate, { maxOutputTokens, activityLabel } = {}) {
+  if (!candidate) {
+    return null;
+  }
+
+  const blockedRatings = Array.isArray(candidate.safetyRatings)
+    ? candidate.safetyRatings.filter((rating) => rating?.blocked)
+    : [];
+  if (blockedRatings.length) {
+    const categories = blockedRatings
+      .map((rating) => formatSafetyCategory(rating?.category))
+      .filter(Boolean)
+      .join(', ');
+    const detail = categories ? ` (${categories})` : '';
+    return `AIが安全性の基準により内容をブロックしました${detail}。表現を穏やかにするか内容を見直してください。`;
+  }
+
+  switch (candidate.finishReason) {
+    case 'MAX_TOKENS': {
+      const label = activityLabel || '出力';
+      const limit = typeof maxOutputTokens === 'number' ? ` (maxOutputTokens: ${maxOutputTokens})` : '';
+      return `AIの${label}がトークン上限${limit}に達しました。対象テキストを短くするか分割して再試行してください。`;
+    }
+    case 'SAFETY':
+      return 'AIが安全性の理由で回答を停止しました。内容を見直してから再試行してください。';
+    case 'RECITATION':
+      return 'AIが著作権保護などの理由で出力を抑止しました。入力内容を調整して再試行してください。';
+    default:
+      return null;
+  }
+}
+
+function formatSafetyCategory(category) {
+  if (!category) return '';
+  switch (category) {
+    case 'HARM_CATEGORY_HATE_SPEECH':
+      return 'ヘイトスピーチ';
+    case 'HARM_CATEGORY_SEXUAL_CONTENT':
+      return '性的コンテンツ';
+    case 'HARM_CATEGORY_HARASSMENT_ABUSE':
+      return 'ハラスメント/暴力';
+    case 'HARM_CATEGORY_DANGEROUS_CONTENT':
+      return '危険行為';
+    case 'HARM_CATEGORY_MEDICAL':
+      return '医療情報';
+    case 'HARM_CATEGORY_FINANCIAL':
+      return '金融情報';
+    case 'HARM_CATEGORY_POLITICAL':
+      return '政治的コンテンツ';
+    default:
+      return String(category);
+  }
 }
 
 function tryParseJson(text) {
