@@ -12,6 +12,8 @@
   const OTHER_TONE_CHECKBOX_SELECTOR = '[data-smart-reply-other-tone-checkbox]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
   const CARET_MARKER_SELECTOR = '[data-smart-reply-caret]';
+  const LIGHTNING_PLACEHOLDER_SELECTOR = '[data-lightning-placeholder]';
+  const LIGHTNING_PLACEHOLDER_TEXT = '＜文章作成中＞...';
   const PROOFREAD_MODAL_ID = 'smart-reply-proofread-modal';
   const PROOFREAD_SOURCE_SELECTOR = '[data-smart-proofread-source]';
   const PROOFREAD_RESULT_SELECTOR = '[data-smart-proofread-result]';
@@ -765,6 +767,116 @@
     cacheSelectionIfInsideCompose();
   }
 
+  function insertLightningPlaceholder(compose) {
+    if (!compose || !document.body.contains(compose)) {
+      return null;
+    }
+
+    const markerApplied = restoreSelectionFromMarker(compose);
+    let selection = window.getSelection();
+
+    if (!markerApplied) {
+      if (!selection || selection.rangeCount === 0) {
+        const fallbackRange = document.createRange();
+        fallbackRange.selectNodeContents(compose);
+        fallbackRange.collapse(false);
+        if (!selection) {
+          selection = window.getSelection();
+        }
+        if (selection) {
+          selection.removeAllRanges();
+          selection.addRange(fallbackRange);
+        }
+      } else {
+        const range = selection.getRangeAt(0);
+        if (!isRangeWithinCompose(range, compose)) {
+          const fallback = document.createRange();
+          fallback.selectNodeContents(compose);
+          fallback.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(fallback);
+        }
+      }
+    }
+
+    selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0).cloneRange();
+    range.collapse(true);
+
+    const placeholder = document.createElement('span');
+    placeholder.setAttribute('data-lightning-placeholder', '');
+    placeholder.style.whiteSpace = 'pre-wrap';
+    placeholder.textContent = LIGHTNING_PLACEHOLDER_TEXT;
+
+    range.insertNode(placeholder);
+
+    const afterRange = document.createRange();
+    afterRange.setStartAfter(placeholder);
+    afterRange.collapse(true);
+
+    const updatedSelection = window.getSelection();
+    if (updatedSelection) {
+      updatedSelection.removeAllRanges();
+      updatedSelection.addRange(afterRange);
+    }
+
+    storeSelection(compose, afterRange);
+
+    const eventDetail = { bubbles: true, data: LIGHTNING_PLACEHOLDER_TEXT, inputType: 'insertText' };
+    if (typeof InputEvent === 'function') {
+      compose.dispatchEvent(new InputEvent('input', eventDetail));
+    } else {
+      compose.dispatchEvent(new Event('input', eventDetail));
+    }
+
+    return placeholder;
+  }
+
+  function removeLightningPlaceholder(compose, placeholder, { keepCaretMarker = false } = {}) {
+    if (!compose || !document.body.contains(compose)) {
+      return null;
+    }
+
+    const target = placeholder && document.body.contains(placeholder)
+      ? placeholder
+      : compose.querySelector(LIGHTNING_PLACEHOLDER_SELECTOR);
+
+    if (!target) {
+      return null;
+    }
+
+    const range = document.createRange();
+    range.setStartBefore(target);
+    range.setEndAfter(target);
+    range.deleteContents();
+    range.collapse(true);
+
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    storeSelection(compose, range);
+
+    if (keepCaretMarker) {
+      insertCaretMarker(compose, range);
+    }
+
+    const eventDetail = { bubbles: true, data: LIGHTNING_PLACEHOLDER_TEXT, inputType: 'deleteContentBackward' };
+    if (typeof InputEvent === 'function') {
+      compose.dispatchEvent(new InputEvent('input', eventDetail));
+    } else {
+      compose.dispatchEvent(new Event('input', eventDetail));
+    }
+
+    return range;
+  }
+
   function openSmartReplyModal() {
     let compose = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : null;
     if (!compose) {
@@ -1084,24 +1196,43 @@
     isLightningInProgress = true;
     const requestId = ++activeLightningRequestId;
 
+    const placeholderNode = insertLightningPlaceholder(compose);
+    if (!placeholderNode) {
+      if (activeLightningRequestId === requestId) {
+        isLightningInProgress = false;
+      }
+      removeCaretMarker(compose);
+      window.alert('カーソル位置を特定できませんでした。もう一度お試しください。');
+      return false;
+    }
+
     const context = getLatestEmailContext();
     const composePreview = (compose.innerText || '').trim();
     const language = detectLanguage(`${context}\n${composePreview}`.trim());
 
     let success = false;
+    let placeholderRemoved = false;
     try {
       const response = await requestLightningSuggestion(context, language);
       if (!response || requestId !== activeLightningRequestId) {
+        removeLightningPlaceholder(compose, placeholderNode, { keepCaretMarker: false });
+        placeholderRemoved = true;
         return false;
       }
       const suggestion = typeof response.suggestion === 'string' ? response.suggestion.trim() : '';
       if (!suggestion) {
         throw new Error('AIから返信案を取得できませんでした。');
       }
+      removeLightningPlaceholder(compose, placeholderNode, { keepCaretMarker: true });
+      placeholderRemoved = true;
       insertSuggestion(suggestion);
       success = true;
       return true;
     } catch (error) {
+      if (!placeholderRemoved) {
+        removeLightningPlaceholder(compose, placeholderNode, { keepCaretMarker: false });
+        placeholderRemoved = true;
+      }
       const message = error instanceof Error ? error.message : 'Lightning Reply の生成に失敗しました。';
       window.alert(message);
       return false;
@@ -1109,8 +1240,13 @@
       if (activeLightningRequestId === requestId) {
         isLightningInProgress = false;
       }
+      if (!placeholderRemoved && compose && document.body.contains(compose)) {
+        removeLightningPlaceholder(compose, placeholderNode, { keepCaretMarker: false });
+        placeholderRemoved = true;
+      }
       if (!success && compose && document.body.contains(compose)) {
         removeCaretMarker(compose);
+        cacheSelectionIfInsideCompose();
       }
     }
   }
