@@ -53,7 +53,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       (async () => {
         try {
           const { context = '', language = 'en' } = message.payload || {};
-          const suggestions = await generateSuggestionsFromAi(context, language, '', { suggestionCountOverride: 1 });
+          const styleCategoryIds = await resolveLightningStyleCategoryIds();
+          const suggestions = await generateSuggestionsFromAi(context, language, '', { suggestionCountOverride: 1, styleCategoryIds });
           const suggestion = Array.isArray(suggestions) ? suggestions[0] || '' : '';
           if (!suggestion) {
             throw new Error('AIから有効な返信案を取得できませんでした。');
@@ -184,7 +185,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, optio
     const serialized = styleExamples
       .map((example) => `【${example.name}】\n${example.content}`)
       .join('\n\n――――――――\n\n');
-    systemPromptParts.push('以下は利用者が登録した返信例です。語調や言い回しを参考にしつつ、現在のメール内容に合わせて新しい返信を作成してください。例文をそのまま転記せず、要点を踏まえて調整してください。');
+    systemPromptParts.push('以下は利用者が登録した返信例です。語調・文末の言い回し・句読点・絵文字や記号などの癖もできる限り踏襲してください。例文をそのまま転記せず、現在のメール内容に合わせて新しい返信を作成してください。');
     systemPromptParts.push(serialized);
   }
 
@@ -287,7 +288,7 @@ function getStoredStyleCategories() {
           if (!id || !name || !content) {
             return null;
           }
-          return { id, name, content };
+          return { id, name, content, useInLightning: Boolean(item?.useInLightning) };
         })
         .filter(Boolean);
       resolve(normalized);
@@ -335,6 +336,16 @@ function truncateStyleContent(content, limit) {
     return `${text.slice(0, limit)}…`;
   }
   return text;
+}
+
+async function resolveLightningStyleCategoryIds() {
+  const categories = await getStoredStyleCategories();
+  if (!categories.length) {
+    return [];
+  }
+  const prioritized = categories.filter((category) => category.useInLightning);
+  const source = prioritized.length ? prioritized : categories;
+  return source.slice(0, MAX_STYLE_EXAMPLES).map((category) => category.id);
 }
 
 function setupContextMenu() {

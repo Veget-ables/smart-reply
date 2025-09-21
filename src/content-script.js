@@ -1288,7 +1288,7 @@
             if (!id || !name || !content) {
               return null;
             }
-            return { id, name, content };
+            return { id, name, content, useInLightning: Boolean(item?.useInLightning) };
           })
           .filter(Boolean);
         resolve(normalized);
@@ -1307,7 +1307,9 @@
 
     // Preselect defaults when nothing is chosen yet
     if (styleCategoryState.selectedIds.size === 0 && categories.length > 0) {
-      const initialSelection = categories
+      const prioritized = categories.filter((category) => category.useInLightning);
+      const source = prioritized.length ? prioritized : categories;
+      const initialSelection = source
         .slice(0, DEFAULT_STYLE_SELECTION_LIMIT)
         .map((category) => category.id);
       styleCategoryState.selectedIds = new Set(initialSelection);

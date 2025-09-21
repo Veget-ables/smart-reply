@@ -79,6 +79,7 @@ addCategoryBtn.addEventListener('click', () => {
     id: crypto.randomUUID(),
     name: name.trim(),
     content: '',
+    useInLightning: false,
   };
   uiState.styleExamples.categories.push(category);
   renderCategories();
@@ -173,6 +174,21 @@ function renderCategories() {
       debouncedPersist();
     });
     item.appendChild(textarea);
+
+    const lightningToggle = document.createElement('label');
+    lightningToggle.className = 'category-lightning-toggle';
+    const lightningCheckbox = document.createElement('input');
+    lightningCheckbox.type = 'checkbox';
+    lightningCheckbox.checked = Boolean(category.useInLightning);
+    lightningCheckbox.addEventListener('change', () => {
+      category.useInLightning = lightningCheckbox.checked;
+      debouncedPersist();
+    });
+    lightningToggle.appendChild(lightningCheckbox);
+    const toggleText = document.createElement('span');
+    toggleText.textContent = 'Lightning Reply にも使用する';
+    lightningToggle.appendChild(toggleText);
+    item.appendChild(lightningToggle);
 
     categoryList.appendChild(item);
   });
@@ -292,6 +308,7 @@ function normalizeCategory(raw) {
     id: raw.id || crypto.randomUUID(),
     name,
     content,
+    useInLightning: typeof raw.useInLightning === 'boolean' ? raw.useInLightning : false,
   };
 }
 
@@ -313,6 +330,7 @@ function convertLegacyStyleExamples(legacy) {
         id: crypto.randomUUID(),
         name,
         content: '',
+        useInLightning: false,
       };
       const examples = Array.isArray(scene.examples) ? scene.examples : [];
       const combined = examples
@@ -351,6 +369,7 @@ function createDefaultStyleExamples() {
         id: 'cat-request',
         name: '取引先への依頼',
         content: '○○テレビ ○○ディレクター様\n\nいつも○○（タレント名）をご厚遇いただきありがとうございます。\n来週の情報番組出演にあたり、当日の進行台本と衣装のカラー指定を事前にご共有いただけますでしょうか。\nスタジオ入りは放送開始60分前を予定しておりますので、台本の最新版を前日19時までにいただけると助かります。\n\nお忙しいところ恐れ入りますが、どうぞよろしくお願いいたします。',
+        useInLightning: true,
       },
     ],
   };
