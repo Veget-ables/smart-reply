@@ -4,6 +4,8 @@ const DEFAULT_SUGGESTION_COUNT = 3;
 const CONTEXT_MENU_ROOT_ID = 'smart-reply-root';
 const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-generate';
 const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
+const COMMAND_OPEN_SMART_REPLY = 'open-smart-reply';
+const COMMAND_OPEN_SMART_PROOFREAD = 'open-smart-proofread';
 
 const STORAGE_DEFAULTS = {
   apiKey: '',
@@ -112,6 +114,17 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     } catch (_error) {
       // Ignore failures (e.g., tab navigated away).
     }
+  }
+});
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command === COMMAND_OPEN_SMART_REPLY) {
+    void dispatchShortcutToActiveTab('SMART_REPLY_OPEN_MODAL');
+    return;
+  }
+
+  if (command === COMMAND_OPEN_SMART_PROOFREAD) {
+    void dispatchShortcutToActiveTab('SMART_PROOFREAD_OPEN_MODAL');
   }
 });
 
@@ -248,6 +261,50 @@ function setupContextMenu() {
     }, () => {
       void chrome.runtime.lastError;
     });
+  });
+}
+
+async function dispatchShortcutToActiveTab(messageType) {
+  const tab = await queryActiveGmailTab();
+  if (!tab?.id) {
+    return;
+  }
+
+  const message = messageType === 'SMART_PROOFREAD_OPEN_MODAL'
+    ? { type: messageType, payload: { text: '' } }
+    : { type: messageType };
+
+  await sendMessageToTab(tab.id, message);
+}
+
+function queryActiveGmailTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+
+      const gmailTab = tabs.find((candidate) => {
+        const url = candidate?.url || '';
+        return typeof url === 'string' && url.startsWith('https://mail.google.com/');
+      });
+
+      resolve(gmailTab || null);
+    });
+  });
+}
+
+function sendMessageToTab(tabId, message) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, message, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch (_error) {
+      resolve();
+    }
   });
 }
 

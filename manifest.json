@@ -22,6 +22,14 @@
       "run_at": "document_idle"
     }
   ],
+  "commands": {
+    "open-smart-reply": {
+      "description": "Smart Replyモーダルを開く"
+    },
+    "open-smart-proofread": {
+      "description": "推敲モーダルを開く"
+    }
+  },
   "action": {
     "default_title": "Smart Reply for Gmail",
     "default_popup": "src/popup.html",
