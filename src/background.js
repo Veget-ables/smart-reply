@@ -171,7 +171,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
   const systemPromptParts = [
     `You are an assistant that drafts professional ${languageLabel} email replies.`, 
     'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
-    `Provide ${count} distinct reply options. Each reply must be 1-3 sentences and ready to send.`, 
+    `Provide ${count} distinct reply options. Keep each reply concise, ready to send, and expand the length only as needed to address the request.`, 
     'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
     'Format each reply so that every sentence starts on a new line. Insert a blank line between the greeting, body, and closing (e.g., "こんにちは\n\nご連絡ありがとうございます。\n追加情報をご教示ください。\n\nよろしくお願いいたします。"). Do not return a single-line paragraph.', 
   ];
@@ -193,7 +193,7 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
     userPrompt = `${baseContext}\n\nCraft ${count} professional ${languageLabel} reply options that address the email thread.`
   }
 
-  const maxOutputTokens = 4000;
+  const maxOutputTokens = 12000;
   const body = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt }] },
