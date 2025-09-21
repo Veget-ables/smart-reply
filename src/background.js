@@ -4,8 +4,10 @@ const DEFAULT_SUGGESTION_COUNT = 3;
 const CONTEXT_MENU_ROOT_ID = 'smart-reply-root';
 const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-generate';
 const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
+const CONTEXT_MENU_LIGHTNING_REPLY_ID = 'smart-reply-lightning';
 const COMMAND_OPEN_SMART_REPLY = 'open-smart-reply';
 const COMMAND_OPEN_SMART_PROOFREAD = 'open-smart-proofread';
+const COMMAND_TRIGGER_LIGHTNING_REPLY = 'trigger-lightning-reply';
 
 const STORAGE_DEFAULTS = {
   apiKey: '',
@@ -38,6 +40,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const { context = '', language = 'en', userPrompt = '', tones = [] } = message.payload || {};
           const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, tones);
           sendResponse({ ok: true, suggestions, language });
+        } catch (error) {
+          const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
+          sendResponse({ ok: false, error: fallbackMessage });
+        }
+      })();
+      return true;
+    }
+    case 'LIGHTNING_REPLY_GENERATE': {
+      (async () => {
+        try {
+          const { context = '', language = 'en' } = message.payload || {};
+          const suggestions = await generateSuggestionsFromAi(context, language, '', [], { suggestionCountOverride: 1 });
+          const suggestion = Array.isArray(suggestions) ? suggestions[0] || '' : '';
+          if (!suggestion) {
+            throw new Error('AIから有効な返信案を取得できませんでした。');
+          }
+          sendResponse({ ok: true, suggestion, language });
         } catch (error) {
           const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
           sendResponse({ ok: false, error: fallbackMessage });
@@ -81,39 +100,35 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     options.frameId = info.frameId;
   }
 
-  const messageTarget = info.menuItemId === CONTEXT_MENU_SMART_REPLY_ID
-    ? 'SMART_REPLY_OPEN_MODAL'
-    : info.menuItemId === CONTEXT_MENU_PROOFREAD_ID
-      ? 'SMART_PROOFREAD_OPEN_MODAL'
-      : null;
+  let message = null;
 
-  if (!messageTarget) {
-    return;
-  }
-
-  if (messageTarget === 'SMART_REPLY_OPEN_MODAL') {
-    try {
-      chrome.tabs.sendMessage(tab.id, { type: 'SMART_REPLY_OPEN_MODAL' }, options, () => {
-        void chrome.runtime.lastError;
-      });
-    } catch (_error) {
-      // Ignore failures (e.g., tab navigated away).
-    }
-    return;
-  }
-
-  if (messageTarget === 'SMART_PROOFREAD_OPEN_MODAL') {
-    try {
-      const payload = {
+  switch (info.menuItemId) {
+    case CONTEXT_MENU_SMART_REPLY_ID:
+      message = { type: 'SMART_REPLY_OPEN_MODAL' };
+      break;
+    case CONTEXT_MENU_PROOFREAD_ID:
+      message = {
         type: 'SMART_PROOFREAD_OPEN_MODAL',
         payload: { text: info.selectionText || '' },
       };
-      chrome.tabs.sendMessage(tab.id, payload, options, () => {
-        void chrome.runtime.lastError;
-      });
-    } catch (_error) {
-      // Ignore failures (e.g., tab navigated away).
-    }
+      break;
+    case CONTEXT_MENU_LIGHTNING_REPLY_ID:
+      message = { type: 'SMART_REPLY_LIGHTNING_EXECUTE' };
+      break;
+    default:
+      break;
+  }
+
+  if (!message) {
+    return;
+  }
+
+  try {
+    chrome.tabs.sendMessage(tab.id, message, options, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (_error) {
+    // Ignore failures (e.g., tab navigated away).
   }
 });
 
@@ -125,10 +140,15 @@ chrome.commands.onCommand.addListener((command) => {
 
   if (command === COMMAND_OPEN_SMART_PROOFREAD) {
     void dispatchShortcutToActiveTab('SMART_PROOFREAD_OPEN_MODAL');
+    return;
+  }
+
+  if (command === COMMAND_TRIGGER_LIGHTNING_REPLY) {
+    void dispatchShortcutToActiveTab('SMART_REPLY_LIGHTNING_EXECUTE');
   }
 });
 
-async function generateSuggestionsFromAi(rawContext, language, userIntent, tones) {
+async function generateSuggestionsFromAi(rawContext, language, userIntent, tones, options = {}) {
   const { apiKey, apiModel, apiEndpoint, suggestionCount } = await storageGet(Object.keys(STORAGE_DEFAULTS));
 
   if (!apiKey) {
@@ -136,7 +156,13 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
   }
 
   const endpoint = apiEndpoint || DEFAULT_ENDPOINT;
-  const count = Math.max(1, Math.min(Number(suggestionCount) || DEFAULT_SUGGESTION_COUNT, 5));
+  const override = options && typeof options.suggestionCountOverride !== 'undefined'
+    ? Number(options.suggestionCountOverride)
+    : null;
+  const resolved = override === null || Number.isNaN(override)
+    ? Number(suggestionCount)
+    : override;
+  const count = Math.max(1, Math.min(Number.isFinite(resolved) ? resolved : DEFAULT_SUGGESTION_COUNT, 5));
 
   const context = (rawContext || '').trim();
   const truncatedContext = context.length > 15000 ? `${context.slice(0, 15000)}...` : context;
@@ -254,6 +280,14 @@ function setupContextMenu() {
       void chrome.runtime.lastError;
     });
     chrome.contextMenus.create({
+      id: CONTEXT_MENU_LIGHTNING_REPLY_ID,
+      parentId: CONTEXT_MENU_ROOT_ID,
+      title: 'Lightning Reply を挿入',
+      contexts: ['editable'],
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+    chrome.contextMenus.create({
       id: CONTEXT_MENU_PROOFREAD_ID,
       parentId: CONTEXT_MENU_ROOT_ID,
       title: '選択テキストを推敲',
@@ -270,9 +304,20 @@ async function dispatchShortcutToActiveTab(messageType) {
     return;
   }
 
-  const message = messageType === 'SMART_PROOFREAD_OPEN_MODAL'
-    ? { type: messageType, payload: { text: '' } }
-    : { type: messageType };
+  let message;
+
+  switch (messageType) {
+    case 'SMART_PROOFREAD_OPEN_MODAL':
+      message = { type: messageType, payload: { text: '' } };
+      break;
+    case 'SMART_REPLY_OPEN_MODAL':
+    case 'SMART_REPLY_LIGHTNING_EXECUTE':
+      message = { type: messageType };
+      break;
+    default:
+      message = { type: messageType };
+      break;
+  }
 
   await sendMessageToTab(tab.id, message);
 }

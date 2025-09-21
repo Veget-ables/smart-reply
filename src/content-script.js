@@ -28,6 +28,8 @@
   let activeCompose = null;
   let isRequestInProgress = false;
   let activeRequestId = 0;
+  let isLightningInProgress = false;
+  let activeLightningRequestId = 0;
   let savedSelection = null;
   let proofreadState = null;
   let isProofreadInProgress = false;
@@ -1050,6 +1052,69 @@
     }
   }
 
+  async function triggerLightningReply() {
+    if (isLightningInProgress) {
+      return false;
+    }
+
+    let compose = (activeCompose && document.body.contains(activeCompose)) ? activeCompose : null;
+    if (!compose) {
+      compose = findComposeFromTarget(document.activeElement);
+    }
+    if (!compose) {
+      compose = document.querySelector(COMPOSE_SELECTOR);
+    }
+    if (!compose) {
+      window.alert('Gmailの本文にカーソルを置いてから実行してください。');
+      return false;
+    }
+
+    activeCompose = compose;
+    compose.focus({ preventScroll: false });
+
+    const snapshot = getCaretSnapshot({ allowCollapsed: true });
+    if (snapshot && snapshot.compose === compose) {
+      insertCaretMarker(compose, snapshot.range);
+      storeSelection(compose, snapshot.range);
+    } else {
+      cacheSelectionIfInsideCompose();
+      insertCaretMarker(compose);
+    }
+
+    isLightningInProgress = true;
+    const requestId = ++activeLightningRequestId;
+
+    const context = getLatestEmailContext();
+    const composePreview = (compose.innerText || '').trim();
+    const language = detectLanguage(`${context}\n${composePreview}`.trim());
+
+    let success = false;
+    try {
+      const response = await requestLightningSuggestion(context, language);
+      if (!response || requestId !== activeLightningRequestId) {
+        return false;
+      }
+      const suggestion = typeof response.suggestion === 'string' ? response.suggestion.trim() : '';
+      if (!suggestion) {
+        throw new Error('AIから返信案を取得できませんでした。');
+      }
+      insertSuggestion(suggestion);
+      success = true;
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Lightning Reply の生成に失敗しました。';
+      window.alert(message);
+      return false;
+    } finally {
+      if (activeLightningRequestId === requestId) {
+        isLightningInProgress = false;
+      }
+      if (!success && compose && document.body.contains(compose)) {
+        removeCaretMarker(compose);
+      }
+    }
+  }
+
   function getLatestEmailContext() {
     const candidates = Array.from(document.querySelectorAll('div.a3s.aiL, div.a3s.aiJ'));
     for (let i = candidates.length - 1; i >= 0; i--) {
@@ -1081,6 +1146,29 @@
             reject(new Error('AIからの応答が受信できませんでした。'));
           } else if (!response.ok) {
             reject(new Error(response.error || 'AI返信の生成に失敗しました。'));
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
+  }
+
+  function requestLightningSuggestion(context, language) {
+    return new Promise((resolve, reject) => {
+      if (!chrome.runtime?.sendMessage) {
+        reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
+        return;
+      }
+      chrome.runtime.sendMessage(
+        { type: 'LIGHTNING_REPLY_GENERATE', payload: { context, language } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message || 'Lightning Reply の生成リクエストに失敗しました。'));
+          } else if (!response) {
+            reject(new Error('AIからの応答が受信できませんでした。'));
+          } else if (!response.ok) {
+            reject(new Error(response.error || 'Lightning Reply の生成に失敗しました。'));
           } else {
             resolve(response);
           }
@@ -1151,6 +1239,16 @@
   observer.observe(document.body, { childList: true, subtree: true });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'SMART_REPLY_LIGHTNING_EXECUTE') {
+      (async () => {
+        const ok = await triggerLightningReply();
+        if (typeof sendResponse === 'function') {
+          sendResponse({ ok });
+        }
+      })();
+      return true;
+    }
+
     if (message?.type === 'SMART_REPLY_OPEN_MODAL') {
       const opened = openSmartReplyModal();
       if (typeof sendResponse === 'function') {
