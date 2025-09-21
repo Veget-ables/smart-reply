@@ -1,6 +1,8 @@
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
+const MAX_STYLE_EXAMPLES = 4;
+const STYLE_EXAMPLE_CHAR_LIMIT = 1200;
 const CONTEXT_MENU_ROOT_ID = 'smart-reply-root';
 const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-generate';
 const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
@@ -37,8 +39,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'SMART_REPLY_GENERATE': {
       (async () => {
         try {
-          const { context = '', language = 'en', userPrompt = '', tones = [] } = message.payload || {};
-          const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, tones);
+          const { context = '', language = 'en', userPrompt = '', styleCategoryIds = [] } = message.payload || {};
+          const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, { styleCategoryIds });
           sendResponse({ ok: true, suggestions, language });
         } catch (error) {
           const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
@@ -51,7 +53,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       (async () => {
         try {
           const { context = '', language = 'en' } = message.payload || {};
-          const suggestions = await generateSuggestionsFromAi(context, language, '', [], { suggestionCountOverride: 1 });
+          const suggestions = await generateSuggestionsFromAi(context, language, '', { suggestionCountOverride: 1 });
           const suggestion = Array.isArray(suggestions) ? suggestions[0] || '' : '';
           if (!suggestion) {
             throw new Error('AIから有効な返信案を取得できませんでした。');
@@ -148,7 +150,7 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-async function generateSuggestionsFromAi(rawContext, language, userIntent, tones, options = {}) {
+async function generateSuggestionsFromAi(rawContext, language, userIntent, options = {}) {
   const { apiKey, apiModel, apiEndpoint, suggestionCount } = await storageGet(Object.keys(STORAGE_DEFAULTS));
 
   if (!apiKey) {
@@ -166,38 +168,44 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
 
   const context = (rawContext || '').trim();
   const truncatedContext = context.length > 15000 ? `${context.slice(0, 15000)}...` : context;
-  const languageLabel = language === 'ja' ? 'Japanese' : 'English';
+  const languageLabel = language === 'ja' ? '日本語' : '英語';
+  const styleCategoryIds = Array.isArray(options?.styleCategoryIds) ? options.styleCategoryIds : [];
+  const styleExamples = styleCategoryIds.length ? await resolveStyleExamples(styleCategoryIds) : [];
 
   const systemPromptParts = [
-    `You are an assistant that drafts professional ${languageLabel} email replies.`, 
-    'Your output MUST be a valid JSON array of strings. Do not include any other text or markdown formatting. For example: ["Thank you.", "I will check it."]', 
-    `Provide ${count} distinct reply options. Keep each reply concise, ready to send, and expand the length only as needed to address the request.`, 
-    'Avoid placeholders like [NAME]; keep a polite, helpful tone.', 
-    'Format each reply so that every sentence starts on a new line. Insert a blank line between the greeting, body, and closing (e.g., "こんにちは\n\nご連絡ありがとうございます。\n追加情報をご教示ください。\n\nよろしくお願いいたします。"). Do not return a single-line paragraph.', 
+    `${languageLabel}でビジネス向けのメール返信案を作成するアシスタントです。`,
+    '出力は文字列のみを要素に持つJSON配列にしてください。余計なテキストやMarkdownは含めないでください。例: ["ありがとうございます。", "確認いたします。"]',
+    `返信案は${count}件用意し、それぞれ即送信できる完成形にしてください。必要に応じて文量を調整し、冗長にならないよう配慮してください。`,
+    '宛名などのプレースホルダー（例: [NAME]）は使用せず、丁寧で前向きな語調を保ってください。',
+    '各文は改行で区切り、挨拶・本文・締めの間には空行を挟んでください（例: "こんにちは\n\nご連絡ありがとうございます。\n追加情報をご教示ください。\n\nよろしくお願いいたします。")。一段落でまとめないでください。',
   ];
 
-  if (tones && tones.length > 0) {
-    systemPromptParts.push(`The user has requested the following tone(s): ${tones.join(', ')}. Please adhere to these tones.`);
+  if (styleExamples.length > 0) {
+    const serialized = styleExamples
+      .map((example) => `【${example.name}】\n${example.content}`)
+      .join('\n\n――――――――\n\n');
+    systemPromptParts.push('以下は利用者が登録した返信例です。語調や言い回しを参考にしつつ、現在のメール内容に合わせて新しい返信を作成してください。例文をそのまま転記せず、要点を踏まえて調整してください。');
+    systemPromptParts.push(serialized);
   }
 
-  const systemPrompt = systemPromptParts.join(' ');
+  const systemPrompt = systemPromptParts.join('\n\n');
 
   let userPrompt;
   const baseContext = truncatedContext
-    ? `The latest email thread is below:\n\n${truncatedContext}`
-    : 'There is no email context.';
+    ? `最新のメールスレッドを以下に示します:\n\n${truncatedContext}`
+    : 'メールスレッドは提供されていません。';
 
   if (userIntent) {
-    userPrompt = `A user wants to reply to an email with the following intent: "${userIntent}".\n\n${baseContext}\n\nBased on the user's intent and the email thread, craft ${count} professional ${languageLabel} reply options.`
+    userPrompt = `利用者は次の意図で返信したいと考えています: "${userIntent}"。\n\n${baseContext}\n\nこの意図とメール内容を踏まえて、${languageLabel}で${count}件のビジネス向け返信案を作成してください。`
   } else {
-    userPrompt = `${baseContext}\n\nCraft ${count} professional ${languageLabel} reply options that address the email thread.`
+    userPrompt = `${baseContext}\n\nこの内容を踏まえて、${languageLabel}で${count}件のビジネス向け返信案を作成してください。`
   }
 
   const maxOutputTokens = 12000;
   const body = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: "OK, I will provide the suggestions in a JSON array." }] },
+      { role: 'model', parts: [{ text: '了解しました。返信案はJSON配列で返します。' }] },
       { role: 'user', parts: [{ text: userPrompt }] },
     ],
     generationConfig: {
@@ -257,6 +265,76 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, tones
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function getStoredStyleCategories() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get({ styleExamples: { categories: [] } }, (result) => {
+      if (chrome.runtime.lastError) {
+        resolve([]);
+        return;
+      }
+      const raw = result?.styleExamples?.categories;
+      if (!Array.isArray(raw)) {
+        resolve([]);
+        return;
+      }
+      const normalized = raw
+        .map((item) => {
+          const id = typeof item?.id === 'string' ? item.id : '';
+          const name = typeof item?.name === 'string' ? item.name.trim() : '';
+          const content = typeof item?.content === 'string' ? item.content.trim() : '';
+          if (!id || !name || !content) {
+            return null;
+          }
+          return { id, name, content };
+        })
+        .filter(Boolean);
+      resolve(normalized);
+    });
+  });
+}
+
+async function resolveStyleExamples(requestedIds) {
+  if (!Array.isArray(requestedIds) || requestedIds.length === 0) {
+    return [];
+  }
+  const categories = await getStoredStyleCategories();
+  if (!categories.length) {
+    return [];
+  }
+
+  const uniqueIds = Array.from(new Set(requestedIds.filter((id) => typeof id === 'string' && id)));
+  if (!uniqueIds.length) {
+    return [];
+  }
+
+  const selected = [];
+  for (const id of uniqueIds) {
+    const match = categories.find((category) => category.id === id);
+    if (match) {
+      selected.push({
+        id: match.id,
+        name: match.name,
+        content: truncateStyleContent(match.content, STYLE_EXAMPLE_CHAR_LIMIT),
+      });
+    }
+    if (selected.length >= MAX_STYLE_EXAMPLES) {
+      break;
+    }
+  }
+  return selected.filter((item) => item.content);
+}
+
+function truncateStyleContent(content, limit) {
+  const text = typeof content === 'string' ? content.trim() : '';
+  if (!text) {
+    return '';
+  }
+  if (limit && text.length > limit) {
+    return `${text.slice(0, limit)}…`;
+  }
+  return text;
 }
 
 function setupContextMenu() {
@@ -366,17 +444,17 @@ async function generateProofreadFromAi(originalText, language) {
     throw new Error('推敲するテキストが空です。');
   }
 
-  const languageLabel = language === 'ja' ? 'Japanese' : 'English';
+  const languageLabel = language === 'ja' ? '日本語' : '英語';
 
   const systemPrompt = [
-    'You are a professional business writing editor and proofreader.',
-    'Polish the provided text so it reads naturally, remains faithful to the original intent, and aligns with modern business etiquette.',
-    'Return only the revised text without extra commentary or quotation marks.',
+    'あなたはビジネス文書の編集と校正を専門とするアシスタントです。',
+    '提供された文章を自然で意図に忠実な表現へ整え、現代的なビジネスマナーに合わせてください。',
+    '出力は校正済みの本文のみとし、追加のコメントや引用符は入れないでください。',
   ].join(' ');
 
   const userPrompt = [
-    `Language: ${languageLabel}.`,
-    'Revise the following text accordingly.',
+    `対象言語: ${languageLabel}。`,
+    '次の文章を上記方針に従って校正してください。',
     '---',
     trimmed,
     '---',
@@ -386,7 +464,7 @@ async function generateProofreadFromAi(originalText, language) {
   const body = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: 'Understood. I will return only the polished text.' }] },
+      { role: 'model', parts: [{ text: '了解しました。校正済みの本文のみを返します。' }] },
       { role: 'user', parts: [{ text: userPrompt }] },
     ],
     generationConfig: {

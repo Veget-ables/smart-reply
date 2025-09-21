@@ -53,26 +53,142 @@
     .status--error {
       color: #d93025;
     }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .tab-button {
+      flex: 1;
+      background: #e8f0fe;
+      color: #1a73e8;
+      border: none;
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .tab-button.is-active {
+      background: #1a73e8;
+      color: #fff;
+    }
+    .tab-panel {
+      display: none;
+    }
+    .tab-panel.is-active {
+      display: block;
+    }
+    .field-group {
+      margin-bottom: 12px;
+    }
+    .field-hint {
+      font-size: 11px;
+      color: #5f6368;
+      margin: 4px 0 0;
+      line-height: 1.4;
+    }
+    .inline-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .inline-controls button {
+      flex-shrink: 0;
+      padding: 6px 8px;
+      font-size: 11px;
+      background: #f1f3f4;
+      color: #202124;
+    }
+    .inline-controls button.primary {
+      background: #1a73e8;
+      color: #fff;
+    }
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #dadce0;
+      font-size: 13px;
+      resize: vertical;
+      min-height: 48px;
+      margin-bottom: 8px;
+    }
+    .category-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .category-item {
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #f8fbff;
+    }
+    .category-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .category-name {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .category-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .category-actions button {
+      background: #f1f3f4;
+      color: #202124;
+      padding: 4px 6px;
+      font-size: 11px;
+    }
+    .full-width-button {
+      width: 100%;
+      margin-top: 4px;
+    }
+    .helper-text {
+      font-size: 11px;
+      color: #5f6368;
+      margin: 4px 0 0;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
   <h1>Smart Reply 設定</h1>
-  <form id="settings-form">
-    <label for="apiKey">Google Cloud APIキー</label>
-    <input id="apiKey" name="apiKey" type="password" placeholder="AIza..." required>
+  <div class="tabs">
+    <button type="button" class="tab-button is-active" data-tab="api">API設定</button>
+    <button type="button" class="tab-button" data-tab="style">スタイル例</button>
+  </div>
 
-    <label for="apiModel">Gemini モデル名</label>
-    <input id="apiModel" name="apiModel" type="text" placeholder="gemini-2.5-flash">
+  <div class="tab-panel is-active" data-panel="api">
+    <form id="settings-form">
+      <label for="apiKey">Google Cloud APIキー</label>
+      <input id="apiKey" name="apiKey" type="password" placeholder="AIza..." required>
 
-    <label for="apiEndpoint">Gemini APIエンドポイント</label>
-    <input id="apiEndpoint" name="apiEndpoint" type="url" placeholder="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent">
+      <label for="apiModel">Gemini モデル名</label>
+      <input id="apiModel" name="apiModel" type="text" placeholder="gemini-2.5-flash">
 
-    <label for="suggestionCount">返信案の数 (1〜5)</label>
-    <input id="suggestionCount" name="suggestionCount" type="number" min="1" max="5" step="1">
+      <label for="apiEndpoint">Gemini APIエンドポイント</label>
+      <input id="apiEndpoint" name="apiEndpoint" type="url" placeholder="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent">
 
-    <button type="submit">保存</button>
-  </form>
-  <div class="status" id="status"></div>
+      <label for="suggestionCount">返信案の数 (1〜5)</label>
+      <input id="suggestionCount" name="suggestionCount" type="number" min="1" max="5" step="1">
+
+      <button type="submit">保存</button>
+    </form>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="tab-panel" data-panel="style">
+    <p class="field-hint">スタイル例を設定で登録しておくと、毎回書き直さずに語調や言い回しをそろえられます。ここで選択した例文はLLMにfew-shotとして渡されます。</p>
+    <div id="categoryList" class="category-list"></div>
+    <button type="button" id="addCategory" class="primary full-width-button">＋カテゴリを追加</button>
+    <div class="status" id="styleStatus"></div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

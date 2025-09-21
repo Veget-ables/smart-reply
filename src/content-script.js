@@ -7,10 +7,10 @@
   const MODAL_ID = 'smart-reply-extension-modal';
   const SUGGESTIONS_CONTAINER_SELECTOR = '[data-smart-reply-suggestions]';
   const USER_PROMPT_SELECTOR = '[data-smart-reply-user-prompt]';
-  const TONE_CHECKBOX_SELECTOR = '[data-smart-reply-tone]';
-  const OTHER_TONE_INPUT_SELECTOR = '[data-smart-reply-other-tone-input]';
-  const OTHER_TONE_CHECKBOX_SELECTOR = '[data-smart-reply-other-tone-checkbox]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
+  const STYLE_CATEGORY_CONTAINER_SELECTOR = '[data-smart-reply-style-categories]';
+  const STYLE_CATEGORY_CHECKBOX_SELECTOR = '[data-smart-reply-style-category]';
+  const DEFAULT_STYLE_SELECTION_LIMIT = 2;
   const CARET_MARKER_SELECTOR = '[data-smart-reply-caret]';
   const LIGHTNING_PLACEHOLDER_SELECTOR = '[data-lightning-placeholder]';
   const LIGHTNING_PLACEHOLDER_TEXT = '＜文章作成中＞...';
@@ -41,13 +41,9 @@
     el.remove();
   });
 
-  const TONE_OPTIONS = {
-    '丁寧な': 'polite',
-    'フォーマルな': 'formal',
-    'カジュアルな': 'casual',
-    '熱意のある': 'enthusiastic',
-    '謙虚な': 'humble',
-    '直接的な': 'direct',
+  const styleCategoryState = {
+    categories: [],
+    selectedIds: new Set(),
   };
 
   function hideModal() {
@@ -63,88 +59,69 @@
 
   function ensureModal() {
     let modal = document.getElementById(MODAL_ID);
-    if (modal) return modal;
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = MODAL_ID;
+      modal.className = 'smart-reply__modal-overlay';
+      modal.addEventListener('click', (e) => { if (e.target === modal) hideModal(); });
 
-    modal = document.createElement('div');
-    modal.id = MODAL_ID;
-    modal.className = 'smart-reply__modal-overlay';
-    modal.addEventListener('click', (e) => { if (e.target === modal) hideModal(); });
+      const content = document.createElement('div');
+      content.className = 'smart-reply__modal-content';
 
-    const content = document.createElement('div');
-    content.className = 'smart-reply__modal-content';
+      // Header
+      const header = document.createElement('div');
+      header.className = 'smart-reply__header';
+      header.innerHTML = `<span>Smart Reply</span><button type="button" class="smart-reply__close">×</button>`;
+      header.querySelector('.smart-reply__close').addEventListener('click', hideModal);
+      content.appendChild(header);
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'smart-reply__header';
-    header.innerHTML = `<span>Smart Reply</span><button type="button" class="smart-reply__close">×</button>`;
-    header.querySelector('.smart-reply__close').addEventListener('click', hideModal);
-    content.appendChild(header);
+      // Body
+      const body = document.createElement('div');
+      body.className = 'smart-reply__body';
 
-    // Body
-    const body = document.createElement('div');
-    body.className = 'smart-reply__body';
-
-    // Form Section
-    const form = document.createElement('div');
-    form.className = 'smart-reply__form';
-    form.innerHTML = `
-      <label class="smart-reply__label">返信のイメージ (任意)</label>
-      <textarea class="smart-reply__user-prompt" data-smart-reply-user-prompt placeholder="感謝を伝え、会議の日程を再調整したい旨を伝える / 12/24とかでどうでしょうか？ / 新幹線が遅れているみたいですみません。"></textarea>
-    `;
-    body.appendChild(form);
-
-    // Tone Section
-    const toneSection = document.createElement('fieldset');
-    toneSection.className = 'smart-reply__tone-section';
-    toneSection.innerHTML = `<legend class="smart-reply__label">文章の雰囲気は？ (任意、複数選択可)</legend>`;
-    const toneCheckboxes = document.createElement('div');
-    toneCheckboxes.className = 'smart-reply__tone-checkboxes';
-
-    for (const [label, value] of Object.entries(TONE_OPTIONS)) {
-      toneCheckboxes.innerHTML += `
-        <div class="smart-reply__checkbox-wrapper">
-          <input type="checkbox" id="tone-${value}" data-smart-reply-tone value="${label}">
-          <label for="tone-${value}">${label}</label>
-        </div>
+      // Form Section
+      const form = document.createElement('div');
+      form.className = 'smart-reply__form';
+      form.innerHTML = `
+        <label class="smart-reply__label">返信のイメージ (任意)</label>
+        <textarea class="smart-reply__user-prompt" data-smart-reply-user-prompt placeholder="感謝を伝え、会議の日程を再調整したい旨を伝える / 12/24とかでどうでしょうか？ / 新幹線が遅れているみたいですみません。"></textarea>
       `;
+      body.appendChild(form);
+
+      // Style category section
+      const styleSection = document.createElement('section');
+      styleSection.className = 'smart-reply__style-section';
+      styleSection.innerHTML = `
+        <label class="smart-reply__label">スタイル例 (任意)</label>
+        <p class="smart-reply__style-hint">設定で保存してあるスタイル例を選ぶと、語調や言い回しをAIが参考にします。</p>
+        <div class="smart-reply__style-categories" data-smart-reply-style-categories></div>
+      `;
+      body.appendChild(styleSection);
+
+      // Generate Button (sticky footer)
+      const generateWrapper = document.createElement('div');
+      generateWrapper.className = 'smart-reply__generate-wrapper';
+      const generateButton = document.createElement('button');
+      generateButton.type = 'button';
+      generateButton.className = 'smart-reply__generate-button';
+      generateButton.textContent = '返信を作成';
+      generateButton.setAttribute('data-smart-reply-generate', '');
+      generateButton.addEventListener('click', handleGenerateClick);
+      generateWrapper.appendChild(generateButton);
+      body.appendChild(generateWrapper);
+
+      // Suggestions
+      const suggestionsContainer = document.createElement('div');
+      suggestionsContainer.className = 'smart-reply__suggestions-container';
+      suggestionsContainer.setAttribute('data-smart-reply-suggestions', '');
+      body.appendChild(suggestionsContainer);
+
+      content.appendChild(body);
+      modal.appendChild(content);
+      document.body.appendChild(modal);
     }
 
-    toneCheckboxes.innerHTML += `
-      <div class="smart-reply__checkbox-wrapper">
-        <input type="checkbox" id="tone-other" data-smart-reply-other-tone-checkbox>
-        <label for="tone-other">その他</label>
-        <input type="text" class="smart-reply__other-tone-input" data-smart-reply-other-tone-input disabled placeholder="具体的な雰囲気を入力">
-      </div>
-    `;
-    toneSection.appendChild(toneCheckboxes);
-    body.appendChild(toneSection);
-
-    // Generate Button
-    const generateButton = document.createElement('button');
-    generateButton.type = 'button';
-    generateButton.className = 'smart-reply__generate-button';
-    generateButton.textContent = '返信を作成';
-    generateButton.setAttribute('data-smart-reply-generate', '');
-    generateButton.addEventListener('click', handleGenerateClick);
-    body.appendChild(generateButton);
-
-    // Suggestions
-    const suggestionsContainer = document.createElement('div');
-    suggestionsContainer.className = 'smart-reply__suggestions-container';
-    suggestionsContainer.setAttribute('data-smart-reply-suggestions', '');
-    body.appendChild(suggestionsContainer);
-
-    content.appendChild(body);
-    modal.appendChild(content);
-    document.body.appendChild(modal);
-
-    // Event listener for 'Other' checkbox
-    const otherCheckbox = modal.querySelector(OTHER_TONE_CHECKBOX_SELECTOR);
-    const otherInput = modal.querySelector(OTHER_TONE_INPUT_SELECTOR);
-    otherCheckbox.addEventListener('change', () => {
-      otherInput.disabled = !otherCheckbox.checked;
-      if (!otherCheckbox.checked) otherInput.value = '';
-    });
+    void loadStyleCategories(modal);
 
     return modal;
   }
@@ -1134,12 +1111,8 @@
     const userInput = modal.querySelector(USER_PROMPT_SELECTOR).value.trim();
     const generateButton = modal.querySelector(GENERATE_BUTTON_SELECTOR);
 
-    const tones = Array.from(modal.querySelectorAll(`${TONE_CHECKBOX_SELECTOR}:checked`)).map(cb => cb.value);
-    const otherToneCheckbox = modal.querySelector(OTHER_TONE_CHECKBOX_SELECTOR);
-    if (otherToneCheckbox?.checked) {
-      const otherToneValue = modal.querySelector(OTHER_TONE_INPUT_SELECTOR).value.trim();
-      if (otherToneValue) tones.push(otherToneValue);
-    }
+    const styleCategoryIds = Array.from(modal.querySelectorAll(`${STYLE_CATEGORY_CHECKBOX_SELECTOR}:checked`)).map((cb) => cb.value);
+    styleCategoryState.selectedIds = new Set(styleCategoryIds);
 
     const context = getLatestEmailContext();
     const language = detectLanguage(context + userInput);
@@ -1150,7 +1123,7 @@
     updateSuggestions({ suggestions: [], language, status: 'loading' });
 
     try {
-      const response = await requestAiSuggestions(context, language, userInput, tones);
+      const response = await requestAiSuggestions(context, language, userInput, styleCategoryIds);
       if (requestId !== activeRequestId) return;
       const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
       updateSuggestions({ suggestions, language, status: suggestions.length ? 'ready' : 'empty' });
@@ -1267,14 +1240,14 @@
     return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(text) ? 'ja' : 'en';
   }
 
-  function requestAiSuggestions(context, language, userPrompt, tones) {
+  function requestAiSuggestions(context, language, userPrompt, styleCategoryIds) {
     return new Promise((resolve, reject) => {
       if (!chrome.runtime?.sendMessage) {
         reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
         return;
       }
       chrome.runtime.sendMessage(
-        { type: 'SMART_REPLY_GENERATE', payload: { context, language, userPrompt, tones } },
+        { type: 'SMART_REPLY_GENERATE', payload: { context, language, userPrompt, styleCategoryIds } },
         (response) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message || 'AI返信の生成リクエストに失敗しました。'));
@@ -1287,6 +1260,106 @@
           }
         }
       );
+    });
+  }
+
+  async function loadStyleCategories(modal) {
+    if (!modal) return;
+    if (!chrome.storage?.sync?.get) {
+      renderStyleCategories(modal, []);
+      return;
+    }
+    const categories = await new Promise((resolve) => {
+      chrome.storage.sync.get({ styleExamples: { categories: [] } }, (result) => {
+        if (chrome.runtime.lastError) {
+          resolve([]);
+          return;
+        }
+        const raw = result?.styleExamples?.categories;
+        if (!Array.isArray(raw)) {
+          resolve([]);
+          return;
+        }
+        const normalized = raw
+          .map((item) => {
+            const id = typeof item?.id === 'string' ? item.id : '';
+            const name = typeof item?.name === 'string' ? item.name.trim() : '';
+            const content = typeof item?.content === 'string' ? item.content.trim() : '';
+            if (!id || !name || !content) {
+              return null;
+            }
+            return { id, name, content };
+          })
+          .filter(Boolean);
+        resolve(normalized);
+      });
+    });
+
+    styleCategoryState.categories = categories;
+    // Remove selections that no longer exist
+    const survivingSelections = new Set();
+    for (const id of styleCategoryState.selectedIds) {
+      if (categories.some((cat) => cat.id === id)) {
+        survivingSelections.add(id);
+      }
+    }
+    styleCategoryState.selectedIds = survivingSelections;
+
+    // Preselect defaults when nothing is chosen yet
+    if (styleCategoryState.selectedIds.size === 0 && categories.length > 0) {
+      const initialSelection = categories
+        .slice(0, DEFAULT_STYLE_SELECTION_LIMIT)
+        .map((category) => category.id);
+      styleCategoryState.selectedIds = new Set(initialSelection);
+    }
+
+    renderStyleCategories(modal, categories);
+  }
+
+  function renderStyleCategories(modal, categories) {
+    const container = modal.querySelector(STYLE_CATEGORY_CONTAINER_SELECTOR);
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!categories.length) {
+      const empty = document.createElement('p');
+      empty.className = 'smart-reply__style-empty';
+      empty.textContent = 'ポップアップでスタイル例を登録すると、ここで選択できるようになります。';
+      container.appendChild(empty);
+      return;
+    }
+
+    categories.forEach((category) => {
+      const item = document.createElement('div');
+      item.className = 'smart-reply__style-category';
+
+      const header = document.createElement('label');
+      header.className = 'smart-reply__style-category-header';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = category.id;
+      checkbox.setAttribute('data-smart-reply-style-category', '');
+      checkbox.checked = styleCategoryState.selectedIds.has(category.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          styleCategoryState.selectedIds.add(category.id);
+        } else {
+          styleCategoryState.selectedIds.delete(category.id);
+        }
+      });
+      header.appendChild(checkbox);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = category.name;
+      header.appendChild(nameSpan);
+      item.appendChild(header);
+
+      const preview = document.createElement('pre');
+      preview.className = 'smart-reply__style-preview';
+      preview.textContent = category.content;
+      item.appendChild(preview);
+
+      container.appendChild(item);
     });
   }
 
