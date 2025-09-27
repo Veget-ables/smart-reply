@@ -1,8 +1,8 @@
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SUGGESTION_COUNT = 3;
-const MAX_STYLE_EXAMPLES = 4;
-const STYLE_EXAMPLE_CHAR_LIMIT = 1200;
+const MAX_INSTRUCTION_PRESETS = 4;
+const INSTRUCTION_CHAR_LIMIT = 1200;
 const CONTEXT_MENU_ROOT_ID = 'smart-reply-root';
 const CONTEXT_MENU_SMART_REPLY_ID = 'smart-reply-generate';
 const CONTEXT_MENU_PROOFREAD_ID = 'smart-proofread-context';
@@ -30,6 +30,72 @@ function storageGet(keys) {
   });
 }
 
+function buildSystemInstruction({ languageLabel, count, instructionPresets }) {
+  const resolvedLanguageLabel = '日本語';
+  const resolvedCount = Math.max(1, Math.min(Number.isFinite(Number(count)) ? Number(count) : DEFAULT_SUGGESTION_COUNT, 5));
+  const instructionBlocks = [
+    `あなたは${resolvedLanguageLabel}でビジネスメールの返信案を作成するアシスタントです。`,
+    '<<Objectives>>\n- 現在進行中のメールスレッドを理解し、送信者に代わって自然で即送信可能な返信案を用意します。\n- 返信案は状況説明・対応方針・次のアクションを明確にし、やり取りの流れを寸断しないようにしてください。',
+    `<<Output Format>>\n- JSON配列として${resolvedCount}件の文字列を返してください。余計なテキストやMarkdownは含めません。\n- 各文字列は挨拶・本題・締めを改行で区切り、挨拶と本文、本文と締めの間に空行を入れてください。`,
+    '<<Tone & Quality>>\n- 受信者がプロフェッショナルかつ思いやりのある印象を受ける文体を維持してください。\n- 宛名プレースホルダーやテンプレート感の強い表現は避け、メール内容に即した固有情報を織り込みます。',
+    '<<Custom Instructions>>\n- ユーザーが登録した指示・返信例を読み込み、それらの意図やトーンを最優先で反映します。\n- 他のルールと衝突する場合も、ユーザー指示を損なわない範囲で文章を調整してください。'
+  ];
+
+  if (instructionPresets.length > 0) {
+    const criticalLines = instructionPresets
+      .map((example, index) => `指示${index + 1}: ${example.name || '名称未設定のプリセット'}`)
+      .join('\n');
+    instructionBlocks.push('<<Critical Requirements>>\n- 以下の指示プリセットに含まれる要素・語尾・口調・キーワードはすべて同時に満たしてください。\n- どれか一つでも抜けたり希薄化したりしないよう文章を調整し、指示同士が矛盾する場合は両立する表現を工夫してください。\n- 各指示ごとに固有の語彙やトーンを文中で明確に反映させてください。');
+    instructionBlocks.push(criticalLines);
+
+    const serialized = instructionPresets
+      .map((example, index) => {
+        const name = example.name || `プリセット${index + 1}`;
+        const contentBody = example.content ? example.content : '（内容が設定されていません）';
+        return `[#${index + 1} ${name}]\n${contentBody}`;
+      })
+      .join('\n\n');
+    instructionBlocks.push('<<Guidance Library>>\n- 以下の指示・参考テキストを熟読し、語尾・語彙・句読点・改行リズム・絵文字などの癖、ならびに明示された意図を可能な限り反映してください。\n- 例文を丸写しせず、現在のメール内容に合わせた新しい文章に落とし込んでください。');
+    instructionBlocks.push(serialized);
+  } else {
+    instructionBlocks.push('<<Guidance Library>>\n- 登録された指示はありません。丁寧で誠実なビジネス口調を保ちつつ、メール文脈から適切な対応案を導いてください。');
+  }
+
+  instructionBlocks.push('<<Process>>\n- スレッドから相手の要望・懸念・締め切りを抽出し、それぞれに明確に応答してください。\n- 必要に応じて謝意・謝罪・次のアクションを盛り込み、自然な会話フローに仕上げてください。\n- 返信案ごとに視点を少し変え（長さ、フォーカス、語調の微差など）、利用者が選びやすいバリエーションを提供してください。');
+
+  instructionBlocks.push('<<Do Not>>\n- 事実と異なる約束や確認済みでない情報を断定しない。\n- 箇条書きの代わりに会話文のみを返さない。\n- JSON配列以外の出力をしない。');
+
+  return instructionBlocks.join('\n\n');
+}
+
+function buildUserPrompt({ languageLabel, count, truncatedContext, userIntent, instructionPresets }) {
+  const sections = [];
+
+  if (truncatedContext) {
+    sections.push(`【メールスレッド抜粋】\n${truncatedContext}`);
+  } else {
+    sections.push('【メールスレッド抜粋】\n提供されていません。');
+  }
+
+  if (userIntent) {
+    sections.push(`【返信の狙い】\n${userIntent}`);
+  }
+
+  if (Array.isArray(instructionPresets) && instructionPresets.length > 0) {
+    const summary = instructionPresets
+      .map((preset, index) => {
+        const name = preset.name || `プリセット${index + 1}`;
+        return `${index + 1}. ${name}`;
+      })
+      .join('\n');
+    sections.push(`【必ず反映する指示プリセット】\n${summary}\n\n上記すべての指示を同時に満たしてください。`);
+  }
+
+  sections.push(`【生成タスク】\n- 上記内容を踏まえ、${languageLabel}で${count}件の返信案を示してください。\n- 各案は送信者視点で書き、受信者が次に取るべきアクションが明瞭になるようにしてください。\n- 返信案ごとに微妙なニュアンスや提案内容を変え、利用者が状況に最適なものを選べるようにしてください。`);
+
+  return sections.join('\n\n');
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message?.type) {
     return false;
@@ -39,12 +105,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'SMART_REPLY_GENERATE': {
       (async () => {
         try {
-          const { context = '', language = 'en', userPrompt = '', styleCategoryIds = [] } = message.payload || {};
-          const suggestions = await generateSuggestionsFromAi(context, language, userPrompt, { styleCategoryIds });
-          sendResponse({ ok: true, suggestions, language });
+          const {
+            context = '',
+            userPrompt = '',
+            instructionPresetIds = [],
+          } = message.payload || {};
+          const suggestions = await generateSuggestionsFromAi(context, 'ja', userPrompt, { instructionPresetIds });
+          sendResponse({ ok: true, suggestions, language: 'ja' });
         } catch (error) {
           const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
           sendResponse({ ok: false, error: fallbackMessage });
+    }
+      })();
+      return true;
+    }
+    case 'SMART_REPLY_PROMPT_PREVIEW': {
+      (async () => {
+        try {
+          const { instructionPresetIds = [] } = message.payload || {};
+          const { suggestionCount } = await storageGet(['suggestionCount']);
+          const numericCount = Number(suggestionCount);
+          const resolvedCount = Math.max(1, Math.min(Number.isFinite(numericCount) ? numericCount : DEFAULT_SUGGESTION_COUNT, 5));
+          const languageLabel = '日本語';
+          const instructionPresets = instructionPresetIds.length ? await resolveInstructionPresets(instructionPresetIds) : [];
+          const systemPrompt = buildSystemInstruction({ languageLabel, count: resolvedCount, instructionPresets });
+          sendResponse({ ok: true, systemPrompt, meta: { languageLabel, count: resolvedCount, instructionPresets } });
+        } catch (error) {
+          const messageText = error instanceof Error ? error.message : 'システムプロンプトの取得に失敗しました。';
+          sendResponse({ ok: false, error: messageText });
         }
       })();
       return true;
@@ -52,14 +140,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'LIGHTNING_REPLY_GENERATE': {
       (async () => {
         try {
-          const { context = '', language = 'en' } = message.payload || {};
-          const styleCategoryIds = await resolveLightningStyleCategoryIds();
-          const suggestions = await generateSuggestionsFromAi(context, language, '', { suggestionCountOverride: 1, styleCategoryIds });
+          const payload = message.payload || {};
+          const context = typeof payload.context === 'string' ? payload.context : '';
+          const hasExplicit = Object.prototype.hasOwnProperty.call(payload, 'instructionPresetIds');
+          const selectedIds = Array.isArray(payload.instructionPresetIds)
+            ? payload.instructionPresetIds.filter((id) => typeof id === 'string' && id)
+            : [];
+          const instructionPresetIds = hasExplicit ? selectedIds : await resolveLightningInstructionPresetIds();
+          const suggestions = await generateSuggestionsFromAi(context, 'ja', '', { suggestionCountOverride: 1, instructionPresetIds });
           const suggestion = Array.isArray(suggestions) ? suggestions[0] || '' : '';
           if (!suggestion) {
             throw new Error('AIから有効な返信案を取得できませんでした。');
           }
-          sendResponse({ ok: true, suggestion, language });
+          sendResponse({ ok: true, suggestion, language: 'ja' });
         } catch (error) {
           const fallbackMessage = error instanceof Error ? error.message : 'AIリクエストで不明なエラーが発生しました。';
           sendResponse({ ok: false, error: fallbackMessage });
@@ -169,55 +262,31 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, optio
 
   const context = (rawContext || '').trim();
   const truncatedContext = context.length > 15000 ? `${context.slice(0, 15000)}...` : context;
-  const languageLabel = language === 'ja' ? '日本語' : '英語';
-  const styleCategoryIds = Array.isArray(options?.styleCategoryIds) ? options.styleCategoryIds : [];
-  const styleExamples = styleCategoryIds.length ? await resolveStyleExamples(styleCategoryIds) : [];
+  const languageLabel = '日本語';
+  const instructionPresetIds = Array.isArray(options?.instructionPresetIds) ? options.instructionPresetIds : [];
+  const instructionPresets = instructionPresetIds.length ? await resolveInstructionPresets(instructionPresetIds) : [];
 
-  const systemPromptParts = [
-    `${languageLabel}でビジネス向けのメール返信案を作成するアシスタントです。`,
-    '出力は文字列のみを要素に持つJSON配列にしてください。余計なテキストやMarkdownは含めないでください。例: ["ありがとうございます。", "確認いたします。"]',
-    `返信案は${count}件用意し、それぞれ即送信できる完成形にしてください。必要に応じて文量を調整し、冗長にならないよう配慮してください。`,
-    '宛名などのプレースホルダー（例: [NAME]）は使用せず、丁寧で前向きな語調を保ってください。',
-    '各文は改行で区切り、挨拶・本文・締めの間には空行を挟んでください（例: "こんにちは\n\nご連絡ありがとうございます。\n追加情報をご教示ください。\n\nよろしくお願いいたします。")。一段落でまとめないでください。',
-  ];
-
-  if (styleExamples.length > 0) {
-    const serialized = styleExamples
-      .map((example) => `【${example.name}】\n${example.content}`)
-      .join('\n\n――――――――\n\n');
-    systemPromptParts.push('以下は利用者が登録した返信例です。語調・文末の言い回し・句読点・絵文字や記号などの癖もできる限り踏襲してください。例文をそのまま転記せず、現在のメール内容に合わせて新しい返信を作成してください。');
-    systemPromptParts.push(serialized);
-  }
-
-  const systemPrompt = systemPromptParts.join('\n\n');
-
-  let userPrompt;
-  const baseContext = truncatedContext
-    ? `最新のメールスレッドを以下に示します:\n\n${truncatedContext}`
-    : 'メールスレッドは提供されていません。';
-
-  if (userIntent) {
-    userPrompt = `利用者は次の意図で返信したいと考えています: "${userIntent}"。\n\n${baseContext}\n\nこの意図とメール内容を踏まえて、${languageLabel}で${count}件のビジネス向け返信案を作成してください。`
-  } else {
-    userPrompt = `${baseContext}\n\nこの内容を踏まえて、${languageLabel}で${count}件のビジネス向け返信案を作成してください。`
-  }
+  const systemPrompt = buildSystemInstruction({ languageLabel, count, instructionPresets });
+  const userPrompt = buildUserPrompt({ languageLabel, count, truncatedContext, userIntent, instructionPresets });
 
   const maxOutputTokens = 12000;
   const body = {
+    system_instruction: {
+      role: 'system',
+      parts: [{ text: systemPrompt }],
+    },
     contents: [
-      { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: '了解しました。返信案はJSON配列で返します。' }] },
       { role: 'user', parts: [{ text: userPrompt }] },
     ],
     generationConfig: {
       response_mime_type: 'application/json',
-      temperature: 0.4,
+      temperature: 0.2,
       maxOutputTokens,
     },
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60-second timeout
 
   try {
     const response = await fetch(endpoint, {
@@ -268,40 +337,54 @@ async function generateSuggestionsFromAi(rawContext, language, userIntent, optio
   }
 }
 
-function getStoredStyleCategories() {
+function getStoredInstructionPresets() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get({ styleExamples: { categories: [] } }, (result) => {
+    chrome.storage.sync.get({ instructionPresets: { entries: [] } }, (result) => {
       if (chrome.runtime.lastError) {
         resolve([]);
         return;
       }
-      const raw = result?.styleExamples?.categories;
-      if (!Array.isArray(raw)) {
-        resolve([]);
-        return;
-      }
-      const normalized = raw
-        .map((item) => {
-          const id = typeof item?.id === 'string' ? item.id : '';
-          const name = typeof item?.name === 'string' ? item.name.trim() : '';
-          const content = typeof item?.content === 'string' ? item.content.trim() : '';
-          if (!id || !name || !content) {
-            return null;
-          }
-          return { id, name, content, useInLightning: Boolean(item?.useInLightning) };
-        })
+
+      const rawPresets = Array.isArray(result?.instructionPresets?.entries)
+        ? result.instructionPresets.entries
+        : [];
+      const normalized = rawPresets
+        .map(normalizeInstructionPreset)
         .filter(Boolean);
+
       resolve(normalized);
     });
   });
 }
 
-async function resolveStyleExamples(requestedIds) {
+function normalizeInstructionPreset(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const id = typeof item.id === 'string' ? item.id.trim() : '';
+  const name = typeof item.name === 'string' ? item.name.trim() : '';
+  const content = typeof item.content === 'string' ? item.content.trim() : '';
+
+  if (!id || !name) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    content,
+    useInLightning: Boolean(item.useInLightning),
+  };
+}
+
+async function resolveInstructionPresets(requestedIds) {
   if (!Array.isArray(requestedIds) || requestedIds.length === 0) {
     return [];
   }
-  const categories = await getStoredStyleCategories();
-  if (!categories.length) {
+
+  const presets = await getStoredInstructionPresets();
+  if (!presets.length) {
     return [];
   }
 
@@ -312,22 +395,23 @@ async function resolveStyleExamples(requestedIds) {
 
   const selected = [];
   for (const id of uniqueIds) {
-    const match = categories.find((category) => category.id === id);
+    const match = presets.find((preset) => preset.id === id);
     if (match) {
       selected.push({
         id: match.id,
         name: match.name,
-        content: truncateStyleContent(match.content, STYLE_EXAMPLE_CHAR_LIMIT),
+        content: truncateInstructionContent(match.content, INSTRUCTION_CHAR_LIMIT),
       });
     }
-    if (selected.length >= MAX_STYLE_EXAMPLES) {
+    if (selected.length >= MAX_INSTRUCTION_PRESETS) {
       break;
     }
   }
-  return selected.filter((item) => item.content);
+
+  return selected;
 }
 
-function truncateStyleContent(content, limit) {
+function truncateInstructionContent(content, limit) {
   const text = typeof content === 'string' ? content.trim() : '';
   if (!text) {
     return '';
@@ -338,14 +422,14 @@ function truncateStyleContent(content, limit) {
   return text;
 }
 
-async function resolveLightningStyleCategoryIds() {
-  const categories = await getStoredStyleCategories();
-  if (!categories.length) {
+async function resolveLightningInstructionPresetIds() {
+  const presets = await getStoredInstructionPresets();
+  if (!presets.length) {
     return [];
   }
-  const prioritized = categories.filter((category) => category.useInLightning);
-  const source = prioritized.length ? prioritized : categories;
-  return source.slice(0, MAX_STYLE_EXAMPLES).map((category) => category.id);
+  const prioritized = presets.filter((preset) => preset.useInLightning);
+  const source = prioritized.length ? prioritized : presets;
+  return source.slice(0, MAX_INSTRUCTION_PRESETS).map((preset) => preset.id);
 }
 
 function setupContextMenu() {
@@ -455,7 +539,7 @@ async function generateProofreadFromAi(originalText, language) {
     throw new Error('推敲するテキストが空です。');
   }
 
-  const languageLabel = language === 'ja' ? '日本語' : '英語';
+  const languageLabel = '日本語';
 
   const systemPrompt = [
     'あなたはビジネス文書の編集と校正を専門とするアシスタントです。',
@@ -486,7 +570,7 @@ async function generateProofreadFromAi(originalText, language) {
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
 
   try {
     const response = await fetch(endpoint, {

@@ -8,9 +8,11 @@
   const SUGGESTIONS_CONTAINER_SELECTOR = '[data-smart-reply-suggestions]';
   const USER_PROMPT_SELECTOR = '[data-smart-reply-user-prompt]';
   const GENERATE_BUTTON_SELECTOR = '[data-smart-reply-generate]';
-  const STYLE_CATEGORY_CONTAINER_SELECTOR = '[data-smart-reply-style-categories]';
-  const STYLE_CATEGORY_CHECKBOX_SELECTOR = '[data-smart-reply-style-category]';
-  const DEFAULT_STYLE_SELECTION_LIMIT = 2;
+  const GUIDANCE_CONTAINER_SELECTOR = '[data-smart-reply-guidance-presets]';
+  const GUIDANCE_CHECKBOX_SELECTOR = '[data-smart-reply-guidance-preset]';
+  const GUIDANCE_ADD_BUTTON_SELECTOR = '[data-smart-reply-guidance-add]';
+  const PROMPT_PREVIEW_MODAL_ID = 'smart-reply-prompt-preview-modal';
+  const DEFAULT_GUIDANCE_SELECTION_LIMIT = 2;
   const CARET_MARKER_SELECTOR = '[data-smart-reply-caret]';
   const LIGHTNING_PLACEHOLDER_SELECTOR = '[data-lightning-placeholder]';
   const LIGHTNING_PLACEHOLDER_TEXT = '＜文章作成中＞...';
@@ -36,17 +38,21 @@
   let proofreadState = null;
   let isProofreadInProgress = false;
   let activeProofreadRequestId = 0;
+  let guidancePersistTimer = null;
+  const GUIDANCE_PERSIST_DELAY = 400;
 
   document.querySelectorAll('.smart-reply__floating-trigger').forEach((el) => {
     el.remove();
   });
 
-  const styleCategoryState = {
-    categories: [],
+  const guidanceState = {
+    presets: [],
     selectedIds: new Set(),
   };
 
   function hideModal() {
+    hidePromptPreview();
+    void flushGuidancePersist();
     const modal = document.getElementById(MODAL_ID);
     if (modal) {
       modal.remove();
@@ -54,6 +60,183 @@
     isRequestInProgress = false;
     if (activeCompose && document.body.contains(activeCompose)) {
       removeCaretMarker(activeCompose);
+    }
+  }
+
+  function scheduleGuidancePersist() {
+    if (guidancePersistTimer) {
+      clearTimeout(guidancePersistTimer);
+    }
+    guidancePersistTimer = setTimeout(() => {
+      guidancePersistTimer = null;
+      void persistGuidancePresets();
+    }, GUIDANCE_PERSIST_DELAY);
+  }
+
+  async function flushGuidancePersist() {
+    if (guidancePersistTimer) {
+      clearTimeout(guidancePersistTimer);
+      guidancePersistTimer = null;
+      await persistGuidancePresets();
+    }
+  }
+
+  function normalizeGuidancePreset(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+    const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : null;
+    const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null;
+    const content = typeof raw.content === 'string' ? raw.content.trim() : '';
+    if (!id || !name) {
+      return null;
+    }
+    return {
+      id,
+      name,
+      content,
+      useInLightning: Boolean(raw.useInLightning),
+    };
+  }
+
+  function handleGuidanceAddClick() {
+    const modal = document.getElementById(MODAL_ID);
+    const name = prompt('新しい指示プリセットの名前を入力してください。');
+    if (!name || !name.trim()) {
+      return;
+    }
+    const preset = {
+      id: generateGuidanceId(),
+      name: name.trim(),
+      content: '',
+      useInLightning: false,
+    };
+    guidanceState.presets = [...guidanceState.presets, preset];
+    guidanceState.selectedIds.add(preset.id);
+    if (modal) {
+      renderGuidancePresets(modal, guidanceState.presets);
+      const newlyAdded = modal.querySelector(`.smart-reply__guidance-card[data-id="${preset.id}"] textarea`);
+      if (newlyAdded) {
+        newlyAdded.focus();
+      }
+    }
+    void persistGuidancePresets();
+  }
+
+  function persistGuidancePresets() {
+    return new Promise((resolve) => {
+      if (!chrome.storage?.sync?.set) {
+        resolve();
+        return;
+      }
+      const payload = {
+        instructionPresets: { entries: guidanceState.presets },
+      };
+      chrome.storage.sync.set(payload, () => {
+        resolve();
+      });
+    });
+  }
+
+  function generateGuidanceId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    return `preset-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  }
+
+  async function handlePromptPreviewClick() {
+    const modal = document.getElementById(MODAL_ID);
+    if (!modal) return;
+
+    const instructionPresetIds = Array.from(modal.querySelectorAll(`${GUIDANCE_CHECKBOX_SELECTOR}:checked`)).map((cb) => cb.value);
+    guidanceState.selectedIds = new Set(instructionPresetIds);
+
+    try {
+      await flushGuidancePersist();
+      const response = await requestPromptPreview('ja', instructionPresetIds);
+      if (!response?.ok) {
+        const message = response?.error || 'システムプロンプトを取得できませんでした。';
+        window.alert(message);
+        return;
+      }
+      showPromptPreview(response.systemPrompt, response.meta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'システムプロンプトを取得できませんでした。';
+      window.alert(message);
+    }
+  }
+
+  function showPromptPreview(systemPrompt, meta = {}) {
+    hidePromptPreview();
+
+    const overlay = document.createElement('div');
+    overlay.id = PROMPT_PREVIEW_MODAL_ID;
+    overlay.className = 'smart-reply__modal-overlay smart-reply__prompt-preview-overlay';
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        hidePromptPreview();
+      }
+    });
+
+    const dialog = document.createElement('div');
+    dialog.className = 'smart-reply__prompt-preview-dialog';
+
+    const header = document.createElement('div');
+    header.className = 'smart-reply__prompt-preview-header';
+    const title = document.createElement('span');
+    title.textContent = '使用するシステムプロンプト';
+    header.appendChild(title);
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'smart-reply__close';
+    closeButton.textContent = '×';
+    closeButton.addEventListener('click', hidePromptPreview);
+    header.appendChild(closeButton);
+    dialog.appendChild(header);
+
+    const metaSection = document.createElement('div');
+    metaSection.className = 'smart-reply__prompt-preview-meta';
+    const metaList = document.createElement('ul');
+    metaList.className = 'smart-reply__prompt-preview-meta-list';
+
+    const languageItem = document.createElement('li');
+    languageItem.textContent = `言語: ${meta?.languageLabel || '日本語'}`;
+    metaList.appendChild(languageItem);
+
+    const countItem = document.createElement('li');
+    countItem.textContent = `返信案の数: ${typeof meta?.count === 'number' ? meta.count : '未設定'}`;
+    metaList.appendChild(countItem);
+
+    if (Array.isArray(meta?.instructionPresets) && meta.instructionPresets.length) {
+      const presetItem = document.createElement('li');
+      const presetDetails = meta.instructionPresets
+        .map((preset, index) => `#${index + 1} ${preset?.name || '名称未設定'}`)
+        .join(' / ');
+      presetItem.textContent = `使用中の指示プリセット: ${presetDetails}`;
+      metaList.appendChild(presetItem);
+    } else {
+      const presetItem = document.createElement('li');
+      presetItem.textContent = '使用中の指示プリセット: なし';
+      metaList.appendChild(presetItem);
+    }
+
+    metaSection.appendChild(metaList);
+    dialog.appendChild(metaSection);
+
+    const promptBlock = document.createElement('pre');
+    promptBlock.className = 'smart-reply__prompt-preview-text';
+    promptBlock.textContent = systemPrompt;
+    dialog.appendChild(promptBlock);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+  }
+
+  function hidePromptPreview() {
+    const overlay = document.getElementById(PROMPT_PREVIEW_MODAL_ID);
+    if (overlay) {
+      overlay.remove();
     }
   }
 
@@ -71,7 +254,7 @@
       // Header
       const header = document.createElement('div');
       header.className = 'smart-reply__header';
-      header.innerHTML = `<span>Smart Reply</span><button type="button" class="smart-reply__close">×</button>`;
+      header.innerHTML = `<span>Smart Reply（Lightning Reply）</span><button type="button" class="smart-reply__close">×</button>`;
       header.querySelector('.smart-reply__close').addEventListener('click', hideModal);
       content.appendChild(header);
 
@@ -89,18 +272,32 @@
       body.appendChild(form);
 
       // Style category section
-      const styleSection = document.createElement('section');
-      styleSection.className = 'smart-reply__style-section';
-      styleSection.innerHTML = `
-        <label class="smart-reply__label">スタイル例 (任意)</label>
-        <p class="smart-reply__style-hint">設定で保存してあるスタイル例を選ぶと、語調や言い回しをAIが参考にします。</p>
-        <div class="smart-reply__style-categories" data-smart-reply-style-categories></div>
+      const guidanceSection = document.createElement('section');
+      guidanceSection.className = 'smart-reply__guidance-section';
+      guidanceSection.innerHTML = `
+        <label class="smart-reply__label">事前指示プリセット (任意)</label>
+        <p class="smart-reply__guidance-hint">ここで選んだ指示・例文をもとに、AIが語調や進め方を合わせます。必要に応じてその場で編集や追加もできます。</p>
+        <div class="smart-reply__guidance-categories" data-smart-reply-guidance-presets></div>
+        <button type="button" class="smart-reply__guidance-add" data-smart-reply-guidance-add>＋指示プリセットを追加</button>
       `;
-      body.appendChild(styleSection);
+      const addGuidanceButton = guidanceSection.querySelector(GUIDANCE_ADD_BUTTON_SELECTOR);
+      if (addGuidanceButton) {
+        addGuidanceButton.addEventListener('click', handleGuidanceAddClick);
+      }
+      body.appendChild(guidanceSection);
 
       // Generate Button (sticky footer)
       const generateWrapper = document.createElement('div');
       generateWrapper.className = 'smart-reply__generate-wrapper';
+
+      const promptPreviewButton = document.createElement('button');
+      promptPreviewButton.type = 'button';
+      promptPreviewButton.className = 'smart-reply__button-secondary smart-reply__prompt-preview-button';
+      promptPreviewButton.setAttribute('data-smart-reply-prompt-preview', '');
+      promptPreviewButton.textContent = 'プロンプトを確認';
+      promptPreviewButton.addEventListener('click', handlePromptPreviewClick);
+      generateWrapper.appendChild(promptPreviewButton);
+
       const generateButton = document.createElement('button');
       generateButton.type = 'button';
       generateButton.className = 'smart-reply__generate-button';
@@ -108,6 +305,7 @@
       generateButton.setAttribute('data-smart-reply-generate', '');
       generateButton.addEventListener('click', handleGenerateClick);
       generateWrapper.appendChild(generateButton);
+
       body.appendChild(generateWrapper);
 
       // Suggestions
@@ -121,7 +319,7 @@
       document.body.appendChild(modal);
     }
 
-    void loadStyleCategories(modal);
+    void loadGuidancePresets(modal);
 
     return modal;
   }
@@ -906,7 +1104,7 @@
       range: range.cloneRange(),
       originalText: initialText,
       resultText: '',
-      language: detectLanguage(initialText),
+      language: 'ja',
     };
 
     storeSelection(compose, range);
@@ -1111,19 +1309,21 @@
     const userInput = modal.querySelector(USER_PROMPT_SELECTOR).value.trim();
     const generateButton = modal.querySelector(GENERATE_BUTTON_SELECTOR);
 
-    const styleCategoryIds = Array.from(modal.querySelectorAll(`${STYLE_CATEGORY_CHECKBOX_SELECTOR}:checked`)).map((cb) => cb.value);
-    styleCategoryState.selectedIds = new Set(styleCategoryIds);
+    const instructionPresetIds = Array.from(modal.querySelectorAll(`${GUIDANCE_CHECKBOX_SELECTOR}:checked`)).map((cb) => cb.value);
+    guidanceState.selectedIds = new Set(instructionPresetIds);
 
     const context = getLatestEmailContext();
-    const language = detectLanguage(context + userInput);
+    const language = 'ja';
     const requestId = ++activeRequestId;
+
+    await flushGuidancePersist();
 
     isRequestInProgress = true;
     if (generateButton) generateButton.disabled = true;
     updateSuggestions({ suggestions: [], language, status: 'loading' });
 
     try {
-      const response = await requestAiSuggestions(context, language, userInput, styleCategoryIds);
+      const response = await requestAiSuggestions(context, language, userInput, instructionPresetIds);
       if (requestId !== activeRequestId) return;
       const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
       updateSuggestions({ suggestions, language, status: suggestions.length ? 'ready' : 'empty' });
@@ -1180,8 +1380,9 @@
     }
 
     const context = getLatestEmailContext();
-    const composePreview = (compose.innerText || '').trim();
-    const language = detectLanguage(`${context}\n${composePreview}`.trim());
+    const language = 'ja';
+
+    await flushGuidancePersist();
 
     let success = false;
     let placeholderRemoved = false;
@@ -1235,19 +1436,14 @@
     return '';
   }
 
-  function detectLanguage(text) {
-    if (!text) return 'en';
-    return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(text) ? 'ja' : 'en';
-  }
-
-  function requestAiSuggestions(context, language, userPrompt, styleCategoryIds) {
+  function requestAiSuggestions(context, language, userPrompt, instructionPresetIds) {
     return new Promise((resolve, reject) => {
       if (!chrome.runtime?.sendMessage) {
         reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
         return;
       }
       chrome.runtime.sendMessage(
-        { type: 'SMART_REPLY_GENERATE', payload: { context, language, userPrompt, styleCategoryIds } },
+        { type: 'SMART_REPLY_GENERATE', payload: { context, language, userPrompt, instructionPresetIds } },
         (response) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message || 'AI返信の生成リクエストに失敗しました。'));
@@ -1263,106 +1459,153 @@
     });
   }
 
-  async function loadStyleCategories(modal) {
+  function requestPromptPreview(language, instructionPresetIds) {
+    return new Promise((resolve, reject) => {
+      if (!chrome.runtime?.sendMessage) {
+        reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
+        return;
+      }
+      chrome.runtime.sendMessage(
+        { type: 'SMART_REPLY_PROMPT_PREVIEW', payload: { language, instructionPresetIds } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message || 'システムプロンプトの取得に失敗しました。'));
+          } else if (!response) {
+            reject(new Error('バックグラウンドから応答がありませんでした。'));
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
+  }
+
+  async function loadGuidancePresets(modal) {
     if (!modal) return;
     if (!chrome.storage?.sync?.get) {
-      renderStyleCategories(modal, []);
+      renderGuidancePresets(modal, []);
       return;
     }
-    const categories = await new Promise((resolve) => {
-      chrome.storage.sync.get({ styleExamples: { categories: [] } }, (result) => {
+
+    const presets = await new Promise((resolve) => {
+      chrome.storage.sync.get({ instructionPresets: { entries: [] } }, (result) => {
         if (chrome.runtime.lastError) {
           resolve([]);
           return;
         }
-        const raw = result?.styleExamples?.categories;
-        if (!Array.isArray(raw)) {
-          resolve([]);
-          return;
-        }
-        const normalized = raw
-          .map((item) => {
-            const id = typeof item?.id === 'string' ? item.id : '';
-            const name = typeof item?.name === 'string' ? item.name.trim() : '';
-            const content = typeof item?.content === 'string' ? item.content.trim() : '';
-            if (!id || !name || !content) {
-              return null;
-            }
-            return { id, name, content, useInLightning: Boolean(item?.useInLightning) };
-          })
+
+        const rawPresets = Array.isArray(result?.instructionPresets?.entries)
+          ? result.instructionPresets.entries
+          : [];
+        const normalized = rawPresets
+          .map(normalizeGuidancePreset)
           .filter(Boolean);
+
         resolve(normalized);
       });
     });
 
-    styleCategoryState.categories = categories;
-    // Remove selections that no longer exist
-    const survivingSelections = new Set();
-    for (const id of styleCategoryState.selectedIds) {
-      if (categories.some((cat) => cat.id === id)) {
-        survivingSelections.add(id);
-      }
-    }
-    styleCategoryState.selectedIds = survivingSelections;
+    guidanceState.presets = presets;
 
-    // Preselect defaults when nothing is chosen yet
-    if (styleCategoryState.selectedIds.size === 0 && categories.length > 0) {
-      const prioritized = categories.filter((category) => category.useInLightning);
-      const source = prioritized.length ? prioritized : categories;
-      const initialSelection = source
-        .slice(0, DEFAULT_STYLE_SELECTION_LIMIT)
-        .map((category) => category.id);
-      styleCategoryState.selectedIds = new Set(initialSelection);
-    }
+    const storedSelections = presets
+      .filter((preset) => preset.useInLightning)
+      .map((preset) => preset.id);
+    guidanceState.selectedIds = new Set(storedSelections);
 
-    renderStyleCategories(modal, categories);
+    renderGuidancePresets(modal, presets);
   }
 
-  function renderStyleCategories(modal, categories) {
-    const container = modal.querySelector(STYLE_CATEGORY_CONTAINER_SELECTOR);
+  function renderGuidancePresets(modal, presets) {
+    const container = modal.querySelector(GUIDANCE_CONTAINER_SELECTOR);
     if (!container) return;
     container.innerHTML = '';
 
-    if (!categories.length) {
+    if (!presets.length) {
       const empty = document.createElement('p');
-      empty.className = 'smart-reply__style-empty';
-      empty.textContent = 'ポップアップでスタイル例を登録すると、ここで選択できるようになります。';
+      empty.className = 'smart-reply__guidance-empty';
+      empty.textContent = 'ポップアップまたはここで指示プリセットを追加すると、AIに共有できます。';
       container.appendChild(empty);
       return;
     }
 
-    categories.forEach((category) => {
+    presets.forEach((preset) => {
       const item = document.createElement('div');
-      item.className = 'smart-reply__style-category';
+      item.className = 'smart-reply__guidance-card';
+      item.dataset.id = preset.id;
 
-      const header = document.createElement('label');
-      header.className = 'smart-reply__style-category-header';
+      const header = document.createElement('div');
+      header.className = 'smart-reply__guidance-card-header';
+
+      const checkboxLabel = document.createElement('label');
+      checkboxLabel.className = 'smart-reply__guidance-checkbox';
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
-      checkbox.value = category.id;
-      checkbox.setAttribute('data-smart-reply-style-category', '');
-      checkbox.checked = styleCategoryState.selectedIds.has(category.id);
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) {
-          styleCategoryState.selectedIds.add(category.id);
-        } else {
-          styleCategoryState.selectedIds.delete(category.id);
-        }
-      });
-      header.appendChild(checkbox);
+      checkbox.value = preset.id;
+      checkbox.setAttribute('data-smart-reply-guidance-preset', '');
+      const initiallySelected = guidanceState.selectedIds.has(preset.id);
+      checkbox.checked = initiallySelected;
+      preset.useInLightning = initiallySelected;
 
       const nameSpan = document.createElement('span');
-      nameSpan.textContent = category.name;
-      header.appendChild(nameSpan);
+      const lightningStatus = document.createElement('span');
+      lightningStatus.className = 'smart-reply__guidance-lightning-indicator';
+      lightningStatus.textContent = initiallySelected ? '（Lightning Reply にも使用されます）' : '';
+
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          guidanceState.selectedIds.add(preset.id);
+          preset.useInLightning = true;
+        } else {
+          guidanceState.selectedIds.delete(preset.id);
+          preset.useInLightning = false;
+        }
+        lightningStatus.textContent = checkbox.checked ? '（Lightning Reply にも使用されます）' : '';
+        void persistGuidancePresets();
+      });
+      checkboxLabel.appendChild(checkbox);
+
+      nameSpan.textContent = preset.name;
+      checkboxLabel.appendChild(nameSpan);
+      checkboxLabel.appendChild(lightningStatus);
+      header.appendChild(checkboxLabel);
+
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'smart-reply__guidance-delete';
+      deleteButton.textContent = '削除';
+      deleteButton.addEventListener('click', () => {
+        const confirmation = window.confirm(`「${preset.name}」を削除しますか？`);
+        if (!confirmation) {
+          return;
+        }
+        guidanceState.presets = guidanceState.presets.filter((entry) => entry.id !== preset.id);
+        guidanceState.selectedIds.delete(preset.id);
+        void persistGuidancePresets().then(() => {
+          renderGuidancePresets(modal, guidanceState.presets);
+        });
+      });
+      header.appendChild(deleteButton);
+
       item.appendChild(header);
 
-      const preview = document.createElement('pre');
-      preview.className = 'smart-reply__style-preview';
-      preview.textContent = category.content;
-      item.appendChild(preview);
+      const textarea = document.createElement('textarea');
+      textarea.className = 'smart-reply__guidance-textarea';
+      textarea.placeholder = '（まだ内容が設定されていません）';
+      textarea.value = preset.content;
+      textarea.rows = 8;
+      textarea.addEventListener('input', (event) => {
+        const value = typeof event.target.value === 'string' ? event.target.value : '';
+        preset.content = value;
+        scheduleGuidancePersist();
+      });
+      textarea.addEventListener('blur', () => {
+        void flushGuidancePersist();
+      });
+      item.appendChild(textarea);
 
       container.appendChild(item);
     });
+
   }
 
   function requestLightningSuggestion(context, language) {
@@ -1371,8 +1614,9 @@
         reject(new Error('拡張機能へのメッセージ送信がサポートされていません。'));
         return;
       }
+      const lightningInstructionIds = Array.from(guidanceState.selectedIds);
       chrome.runtime.sendMessage(
-        { type: 'LIGHTNING_REPLY_GENERATE', payload: { context, language } },
+        { type: 'LIGHTNING_REPLY_GENERATE', payload: { context, language, instructionPresetIds: lightningInstructionIds } },
         (response) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message || 'Lightning Reply の生成リクエストに失敗しました。'));

@@ -172,11 +172,6 @@
 </head>
 <body>
   <h1>Smart Reply 設定</h1>
-  <div class="tabs">
-    <button type="button" class="tab-button is-active" data-tab="api">API設定</button>
-    <button type="button" class="tab-button" data-tab="style">スタイル例</button>
-  </div>
-
   <div class="tab-panel is-active" data-panel="api">
     <form id="settings-form">
       <label for="apiKey">Google Cloud APIキー</label>
@@ -194,13 +189,6 @@
       <button type="submit">保存</button>
     </form>
     <div class="status" id="status"></div>
-  </div>
-
-  <div class="tab-panel" data-panel="style">
-    <p class="field-hint">スタイル例を設定で登録しておくと、毎回書き直さずに語調や言い回しをそろえられます。ここで選択した例文はLLMにfew-shotとして渡されます。</p>
-    <div id="categoryList" class="category-list"></div>
-    <button type="button" id="addCategory" class="primary full-width-button">＋カテゴリを追加</button>
-    <div class="status" id="styleStatus"></div>
   </div>
 
   <script src="popup.js"></script>
