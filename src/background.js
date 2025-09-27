@@ -447,7 +447,7 @@ function setupContextMenu() {
     chrome.contextMenus.create({
       id: CONTEXT_MENU_SMART_REPLY_ID,
       parentId: CONTEXT_MENU_ROOT_ID,
-      title: 'Smart Reply を生成',
+      title: 'Smart Reply（マニュアル）',
       contexts: ['editable'],
     }, () => {
       void chrome.runtime.lastError;
@@ -455,7 +455,7 @@ function setupContextMenu() {
     chrome.contextMenus.create({
       id: CONTEXT_MENU_LIGHTNING_REPLY_ID,
       parentId: CONTEXT_MENU_ROOT_ID,
-      title: 'Lightning Reply を挿入',
+      title: 'Smart Reply（オート）',
       contexts: ['editable'],
     }, () => {
       void chrome.runtime.lastError;

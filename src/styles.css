@@ -80,7 +80,7 @@
 .smart-reply__guidance-delete { background: transparent; border: none; color: #d93025; font-size: 12px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
 .smart-reply__guidance-delete:hover { background: rgba(217, 48, 37, 0.08); }
 .smart-reply__guidance-checkbox { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.smart-reply__guidance-lightning-indicator { font-size: 12px; color: #c5221f; font-weight: 500; }
+.smart-reply__guidance-lightning-indicator { font-size: 12px; color: #3c4043; font-weight: 500; }
 .smart-reply__guidance-checkbox input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
 .smart-reply__guidance-empty { font-size: 12px; color: #5f6368; background: #f8f9fa; border-radius: 8px; padding: 12px; margin: 0; }
 .smart-reply__guidance-textarea { width: 100%; min-height: 120px; padding: 10px; border: 1px solid #dadce0; border-radius: 8px; font-size: 13px; resize: vertical; box-sizing: border-box; margin-bottom: 4px; }

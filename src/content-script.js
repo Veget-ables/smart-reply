@@ -254,7 +254,7 @@
       // Header
       const header = document.createElement('div');
       header.className = 'smart-reply__header';
-      header.innerHTML = `<span>Smart Reply（Lightning Reply）</span><button type="button" class="smart-reply__close">×</button>`;
+      header.innerHTML = `<span>Smart Reply</span><button type="button" class="smart-reply__close">×</button>`;
       header.querySelector('.smart-reply__close').addEventListener('click', hideModal);
       content.appendChild(header);
 
@@ -1407,7 +1407,7 @@
         removeLightningPlaceholder(compose, placeholderNode, { keepCaretMarker: false });
         placeholderRemoved = true;
       }
-      const message = error instanceof Error ? error.message : 'Lightning Reply の生成に失敗しました。';
+      const message = error instanceof Error ? error.message : 'Smart Reply（オート）の生成に失敗しました。';
       window.alert(message);
       return false;
     } finally {
@@ -1549,17 +1549,17 @@
       const nameSpan = document.createElement('span');
       const lightningStatus = document.createElement('span');
       lightningStatus.className = 'smart-reply__guidance-lightning-indicator';
-      lightningStatus.textContent = initiallySelected ? '（Lightning Reply にも使用されます）' : '';
+      lightningStatus.textContent = '（Smart Reply オートにも使用されます）';
 
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) {
           guidanceState.selectedIds.add(preset.id);
-          preset.useInLightning = true;
-        } else {
-          guidanceState.selectedIds.delete(preset.id);
-          preset.useInLightning = false;
-        }
-        lightningStatus.textContent = checkbox.checked ? '（Lightning Reply にも使用されます）' : '';
+        preset.useInLightning = true;
+      } else {
+        guidanceState.selectedIds.delete(preset.id);
+        preset.useInLightning = false;
+      }
+        lightningStatus.textContent = '（Smart Reply オートにも使用されます）';
         void persistGuidancePresets();
       });
       checkboxLabel.appendChild(checkbox);
@@ -1619,11 +1619,11 @@
         { type: 'LIGHTNING_REPLY_GENERATE', payload: { context, language, instructionPresetIds: lightningInstructionIds } },
         (response) => {
           if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message || 'Lightning Reply の生成リクエストに失敗しました。'));
+            reject(new Error(chrome.runtime.lastError.message || 'Smart Reply（オート）の生成リクエストに失敗しました。'));
           } else if (!response) {
             reject(new Error('AIからの応答が受信できませんでした。'));
           } else if (!response.ok) {
-            reject(new Error(response.error || 'Lightning Reply の生成に失敗しました。'));
+            reject(new Error(response.error || 'Smart Reply（オート）の生成に失敗しました。'));
           } else {
             resolve(response);
           }
